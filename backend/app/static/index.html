@@ -166,9 +166,40 @@
     margin-left: 6px;
   }
   .empty { color: var(--muted); font-size: 13px; padding: 12px; }
+  .badge.recur { background: rgba(91, 140, 255, 0.18); color: var(--accent); }
+  #toasts {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    z-index: 10;
+  }
+  .toast {
+    background: var(--panel);
+    border: 1px solid var(--accent);
+    border-radius: 10px;
+    padding: 12px 14px;
+    width: 280px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    animation: toast-in 0.15s ease-out;
+  }
+  .toast .title { font-size: 13px; font-weight: 600; }
+  .toast .title::before { content: "⏰ "; }
+  .toast .row { display: flex; gap: 6px; justify-content: flex-end; }
+  @keyframes toast-in {
+    from { opacity: 0; transform: translateY(-6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
 </style>
 </head>
 <body>
+
+<div id="toasts"></div>
 
 <div class="panel chat-panel">
   <header>
@@ -202,6 +233,21 @@ const input = document.getElementById("message");
 const botNameEl = document.getElementById("bot-name");
 
 const DEFAULT_BOT_NAME = "Custom To-Do Bot";
+
+function loadSessionId() {
+  try {
+    let id = localStorage.getItem("sessionId");
+    if (!id) {
+      id = crypto.randomUUID();
+      localStorage.setItem("sessionId", id);
+    }
+    return id;
+  } catch {
+    return crypto.randomUUID();
+  }
+}
+
+const sessionId = loadSessionId();
 
 function loadBotName() {
   try {
@@ -278,7 +324,7 @@ function renderTasks(tasks) {
     row.className = `task ${t.status === "completed" ? "completed" : ""}`;
     row.innerHTML = `
       <div>
-        <div class="title">${t.title}<span class="badge">${t.status}</span></div>
+        <div class="title">${t.title}<span class="badge">${t.status}</span>${t.recurrence ? `<span class="badge recur">↻ ${t.recurrence}</span>` : ""}</div>
         <div class="due">${fmtDue(t.due_at)}</div>
       </div>
       <div class="actions">
@@ -324,7 +370,7 @@ form.addEventListener("submit", async (ev) => {
     const res = await fetch("/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: text }),
+      body: JSON.stringify({ message: text, session_id: sessionId }),
     });
     const data = await res.json();
     addMessage(data.reply, "bot", data.intent);
@@ -333,6 +379,50 @@ form.addEventListener("submit", async (ev) => {
   }
   refreshTasks();
 });
+
+const toastsEl = document.getElementById("toasts");
+const shownReminderIds = new Set();
+
+function showToast(task) {
+  const el = document.createElement("div");
+  el.className = "toast";
+  el.innerHTML = `
+    <div class="title">${task.title}</div>
+    <div class="row">
+      <button class="ghost" data-action="dismiss">Dismiss</button>
+      <button data-action="done">Done</button>
+    </div>
+  `;
+  el.querySelector('[data-action="dismiss"]').addEventListener("click", () => el.remove());
+  el.querySelector('[data-action="done"]').addEventListener("click", async () => {
+    await fetch(`/tasks/${task.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "completed" }),
+    });
+    el.remove();
+    refreshTasks();
+  });
+  toastsEl.appendChild(el);
+}
+
+async function pollDueReminders() {
+  try {
+    const res = await fetch("/reminders/due");
+    const due = await res.json();
+    for (const task of due) {
+      const key = `${task.id}:${task.due_at}`;
+      if (shownReminderIds.has(key)) continue;
+      shownReminderIds.add(key);
+      showToast(task);
+    }
+  } catch {
+    // Reminder polling is best-effort; a network hiccup shouldn't break the page.
+  }
+}
+
+setInterval(pollDueReminders, 15000);
+pollDueReminders();
 
 refreshTasks();
 </script>
