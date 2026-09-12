@@ -9,12 +9,14 @@ class TaskCreate(BaseModel):
     title: str
     description: str | None = None
     due_at: datetime | None = None
+    recurrence: str | None = None
 
 
 class TaskUpdate(BaseModel):
     title: str | None = None
     description: str | None = None
     due_at: datetime | None = None
+    recurrence: str | None = None
     status: TaskStatus | None = None
 
 
@@ -25,6 +27,7 @@ class TaskOut(BaseModel):
     title: str
     description: str | None
     due_at: datetime | None
+    recurrence: str | None
     status: TaskStatus
     created_at: datetime
     updated_at: datetime
@@ -32,6 +35,7 @@ class TaskOut(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
+    session_id: str | None = None
 
 
 class ChatResponse(BaseModel):

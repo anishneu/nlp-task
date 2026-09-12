@@ -1,17 +1,112 @@
+import re
+from datetime import date, datetime, time
+
+import dateparser
 from sqlalchemy.orm import Session
 
 from app import crud
-from app.models import TaskStatus
+from app.models import ClarificationKind, PendingClarification, Task, TaskStatus
 from app.nlp.intents import Intent
 from app.nlp.parser import parse
 from app.schemas import ChatResponse, TaskCreate, TaskOut, TaskUpdate
+
+_ORDINAL_WORDS = {
+    "first": 0, "1st": 0, "1": 0,
+    "second": 1, "2nd": 1, "2": 1,
+    "third": 2, "3rd": 2, "3": 2,
+    "fourth": 3, "4th": 3, "4": 3,
+}
+_STOPWORDS = {"the", "a", "an", "one", "task", "reminder", "that", "this", "please", "my", "it"}
 
 
 def _format_due(due_at) -> str:
     return due_at.strftime("%a, %b %d at %I:%M %p") if due_at else ""
 
 
-def handle_message(db: Session, text: str) -> ChatResponse:
+def _format_confirmation(title: str, due_at, recurrence: str | None) -> str:
+    when = f" for {_format_due(due_at)}" if due_at else ""
+    repeats = f", repeating {recurrence}" if recurrence else ""
+    return f'Got it — I\'ve scheduled "{title}"{when}{repeats}.'
+
+
+def _keywords(text: str) -> set[str]:
+    return {w for w in re.findall(r"\w+", text.lower()) if w not in _STOPWORDS}
+
+
+def _resolve_choice(text: str, candidates: list[Task]) -> Task | None:
+    lowered = text.strip().lower()
+    index = _ORDINAL_WORDS.get(lowered)
+    if index is not None and index < len(candidates):
+        return candidates[index]
+
+    direct = [c for c in candidates if lowered in c.title.lower() or c.title.lower() in lowered]
+    if len(direct) == 1:
+        return direct[0]
+
+    query_words = _keywords(lowered)
+    if not query_words:
+        return None
+    scored = [
+        (len(query_words & _keywords(c.title)), c)
+        for c in candidates
+    ]
+    scored = [(score, c) for score, c in scored if score > 0]
+    if not scored:
+        return None
+    scored.sort(key=lambda pair: -pair[0])
+    if len(scored) == 1 or scored[0][0] > scored[1][0]:
+        return scored[0][1]
+    return None
+
+
+def _handle_followup(db: Session, pending: PendingClarification, text: str) -> ChatResponse | None:
+    if pending.kind == ClarificationKind.awaiting_time:
+        base_date = date.fromisoformat(pending.base_date)
+        parsed_dt = dateparser.parse(
+            text,
+            settings={"RELATIVE_BASE": datetime.combine(base_date, time.min), "PREFER_DATES_FROM": "future"},
+        )
+        if parsed_dt is None:
+            return None
+        task = crud.create_task(
+            db, TaskCreate(title=pending.title, due_at=parsed_dt, recurrence=pending.recurrence)
+        )
+        return ChatResponse(
+            reply=_format_confirmation(task.title, task.due_at, task.recurrence),
+            intent=Intent.create_task.value,
+            task=TaskOut.model_validate(task),
+        )
+
+    if pending.kind == ClarificationKind.awaiting_task_choice:
+        ids = [int(x) for x in (pending.candidate_ids or "").split(",") if x]
+        candidates = crud.get_tasks_by_ids(db, ids)
+        chosen = _resolve_choice(text, candidates)
+        if chosen is None:
+            return None
+        if pending.action == Intent.complete_task.value:
+            task = crud.update_task(db, chosen, TaskUpdate(status=TaskStatus.completed))
+            return ChatResponse(
+                reply=f'Marked "{task.title}" as completed.',
+                intent=pending.action,
+                task=TaskOut.model_validate(task),
+            )
+        crud.delete_task(db, chosen)
+        return ChatResponse(reply=f'Deleted "{chosen.title}".', intent=pending.action)
+
+    return None
+
+
+def handle_message(db: Session, text: str, session_id: str | None = None) -> ChatResponse:
+    if session_id:
+        pending = crud.get_pending(db, session_id)
+        if pending:
+            response = _handle_followup(db, pending, text)
+            crud.clear_pending(db, session_id)
+            if response is not None:
+                return response
+            # Couldn't interpret as an answer to the pending question — treat
+            # this message as a fresh command instead of getting stuck.
+
     parsed = parse(text)
 
     if parsed.intent == Intent.create_task:
@@ -21,14 +116,25 @@ def handle_message(db: Session, text: str) -> ChatResponse:
                 intent=parsed.intent.value,
             )
         if parsed.date_is_ambiguous:
+            base_date = parsed.due_at.date() if parsed.due_at else date.today()
+            if session_id:
+                crud.set_pending(
+                    db,
+                    session_id,
+                    kind=ClarificationKind.awaiting_time,
+                    title=parsed.title,
+                    base_date=base_date.isoformat(),
+                    recurrence=parsed.recurrence,
+                )
             return ChatResponse(
                 reply=f'What time should I remind you to "{parsed.title}"?',
                 intent=parsed.intent.value,
             )
-        task = crud.create_task(db, TaskCreate(title=parsed.title, due_at=parsed.due_at))
-        when = f" for {_format_due(task.due_at)}" if task.due_at else ""
+        task = crud.create_task(
+            db, TaskCreate(title=parsed.title, due_at=parsed.due_at, recurrence=parsed.recurrence)
+        )
         return ChatResponse(
-            reply=f'Got it — I\'ve scheduled "{task.title}"{when}.',
+            reply=_format_confirmation(task.title, task.due_at, task.recurrence),
             intent=parsed.intent.value,
             task=TaskOut.model_validate(task),
         )
@@ -58,9 +164,17 @@ def handle_message(db: Session, text: str) -> ChatResponse:
                 intent=parsed.intent.value,
             )
         if len(matches) > 1:
-            titles = ", ".join(f'"{m.title}"' for m in matches)
+            if session_id:
+                crud.set_pending(
+                    db,
+                    session_id,
+                    kind=ClarificationKind.awaiting_task_choice,
+                    action=parsed.intent.value,
+                    candidate_ids=",".join(str(m.id) for m in matches),
+                )
+            titles = ", ".join(f'{i + 1}) "{m.title}"' for i, m in enumerate(matches))
             return ChatResponse(
-                reply=f"I found multiple matching tasks: {titles}. Could you be more specific?",
+                reply=f"I found multiple matching tasks: {titles}. Which one did you mean?",
                 intent=parsed.intent.value,
                 tasks=[TaskOut.model_validate(m) for m in matches],
             )

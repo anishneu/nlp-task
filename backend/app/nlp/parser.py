@@ -5,6 +5,7 @@ from datetime import date, datetime
 import dateparser
 
 from app.models import TaskStatus
+from app.nlp.hf_intent import classify_intent_hf
 from app.nlp.intents import Intent
 
 _DAY = r"(?:mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:rs|rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)"
@@ -13,14 +14,19 @@ _TIME = r"\d{1,2}(?::\d{2})?\s*(?:am|pm)|noon|midnight"
 _REL = r"today|tomorrow|tonight"
 _NEXT_THIS = rf"(?:next|this)\s+(?:week|month|year|{_DAY})"
 _IN_OFFSET = rf"in\s+{_NUM_WORD}\s+(?:minute|hour|day|week)s?"
+_RECUR_DAY = rf"every\s+{_DAY}"
+_RECUR_UNIT = r"every\s+(?:day|week|month)"
 
 _DATE_PHRASE_RE = re.compile(
-    rf"\b(?:{_REL}|{_NEXT_THIS}|{_DAY}|{_IN_OFFSET})\b(?:\s+at\s+(?:{_TIME})\b)?"
+    rf"\b(?:{_RECUR_DAY}|{_RECUR_UNIT}|{_REL}|{_NEXT_THIS}|{_DAY}|{_IN_OFFSET})\b(?:\s+at\s+(?:{_TIME})\b)?"
     rf"|\b(?:{_TIME})\b",
     re.IGNORECASE,
 )
 _IN_OFFSET_RE = re.compile(rf"^{_IN_OFFSET}\b", re.IGNORECASE)
 _TIME_RE = re.compile(rf"\b(?:{_TIME})\b", re.IGNORECASE)
+_RECUR_DAY_RE = re.compile(rf"^every\s+{_DAY}", re.IGNORECASE)
+_RECUR_UNIT_RE = re.compile(r"^every\s+(day|week|month)\b", re.IGNORECASE)
+_RECURRENCE_LABELS = {"day": "daily", "week": "weekly", "month": "monthly"}
 
 _CREATE_TRIGGERS = [
     r"^remind me to\s+",
@@ -68,6 +74,7 @@ _TRAILING_NOUN_RE = re.compile(r"\s+(?:task|reminder)$", re.IGNORECASE)
 class DatePhrase:
     due_at: datetime | None
     has_explicit_time: bool
+    recurrence: str | None = None
 
 
 @dataclass
@@ -77,6 +84,7 @@ class ParsedMessage:
     title: str | None = None
     due_at: datetime | None = None
     date_is_ambiguous: bool = False
+    recurrence: str | None = None
     task_query: str | None = None
     status_filter: TaskStatus | None = None
     due_on: date | None = None
@@ -84,11 +92,23 @@ class ParsedMessage:
 
 def _parse_date_match(match: re.Match) -> DatePhrase:
     phrase = match.group(0)
-    parsed = dateparser.parse(phrase, settings={"PREFER_DATES_FROM": "future"})
-    if parsed is None:
+    recurrence = None
+    remainder = phrase
+
+    unit_match = _RECUR_UNIT_RE.match(phrase)
+    day_match = _RECUR_DAY_RE.match(phrase)
+    if unit_match:
+        recurrence = _RECURRENCE_LABELS[unit_match.group(1).lower()]
+        remainder = phrase[unit_match.end():].strip()
+    elif day_match:
+        recurrence = "weekly"
+        remainder = phrase[len("every "):].strip()
+
+    parsed = dateparser.parse(remainder, settings={"PREFER_DATES_FROM": "future"}) if remainder else None
+    if parsed is None and recurrence is None:
         return DatePhrase(due_at=None, has_explicit_time=False)
     is_precise = bool(_TIME_RE.search(phrase)) or bool(_IN_OFFSET_RE.match(phrase))
-    return DatePhrase(due_at=parsed, has_explicit_time=is_precise)
+    return DatePhrase(due_at=parsed, has_explicit_time=is_precise, recurrence=recurrence)
 
 
 def _extract_date_phrase(text: str) -> DatePhrase:
@@ -125,6 +145,9 @@ def _clean_task_reference(text: str) -> str:
 
 
 def _classify_intent(text: str) -> Intent:
+    hf_intent = classify_intent_hf(text)
+    if hf_intent is not None:
+        return hf_intent
     if _DELETE_INTENT_RE.search(text):
         return Intent.delete_task
     if _COMPLETE_INTENT_RE.search(text):
@@ -154,12 +177,16 @@ def parse(text: str) -> ParsedMessage:
     if intent == Intent.create_task:
         remainder = _strip_create_trigger(text)
         title, date_phrase = _split_on_date_phrase(remainder)
+        ambiguous = (date_phrase.due_at is not None and not date_phrase.has_explicit_time) or (
+            date_phrase.recurrence is not None and date_phrase.due_at is None
+        )
         return ParsedMessage(
             intent=intent,
             raw_text=text,
             title=title or None,
             due_at=date_phrase.due_at,
-            date_is_ambiguous=date_phrase.due_at is not None and not date_phrase.has_explicit_time,
+            date_is_ambiguous=ambiguous,
+            recurrence=date_phrase.recurrence,
         )
 
     if intent == Intent.list_tasks:
