@@ -10,4 +10,4 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 
 @router.post("", response_model=ChatResponse)
 def chat(req: ChatRequest, db: Session = Depends(get_db)):
-    return handle_message(db, req.message, req.session_id)
+    return handle_message(db, req.message, req.session_id, req.bot_name)

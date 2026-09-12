@@ -2,6 +2,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.database import Base, engine
 from app.routers import chat, reminders, tasks
@@ -15,6 +16,9 @@ app = FastAPI(title="Custom To-Do Bot API")
 app.include_router(tasks.router)
 app.include_router(chat.router)
 app.include_router(reminders.router)
+app.mount(
+    "/assets", StaticFiles(directory=STATIC_DIR / "assets", check_dir=False), name="assets"
+)
 
 
 @app.on_event("startup")
@@ -34,4 +38,10 @@ def health():
 
 @app.get("/", include_in_schema=False)
 def ui():
-    return FileResponse(STATIC_DIR / "index.html")
+    index_file = STATIC_DIR / "index.html"
+    if not index_file.exists():
+        return (
+            "Frontend not built yet. Run `npm run build` in frontend/ "
+            "(or `npm run dev` for local development), then reload."
+        )
+    return FileResponse(index_file)
