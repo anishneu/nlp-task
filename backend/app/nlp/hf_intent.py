@@ -3,7 +3,7 @@ import requests
 from app.config import HF_INTENT_MODEL, HF_TOKEN
 from app.nlp.intents import Intent
 
-_API_URL = f"https://api-inference.huggingface.co/models/{HF_INTENT_MODEL}"
+_API_URL = f"https://router.huggingface.co/hf-inference/models/{HF_INTENT_MODEL}"
 _MIN_CONFIDENCE = 0.5
 _TIMEOUT_SECONDS = 6
 
@@ -35,8 +35,9 @@ def classify_intent_hf(text: str) -> Intent | None:
         )
         response.raise_for_status()
         data = response.json()
-        top_label = data["labels"][0]
-        top_score = data["scores"][0]
+        top = max(data, key=lambda item: item["score"])
+        top_label = top["label"]
+        top_score = top["score"]
     except Exception:
         return None
 

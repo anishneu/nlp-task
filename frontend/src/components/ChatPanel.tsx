@@ -1,0 +1,119 @@
+import { useState } from 'react'
+import { api } from '../api'
+import { loadSessionId } from '../storage'
+
+interface Message {
+  text: string
+  who: 'user' | 'bot'
+  intent?: string
+}
+
+const EXAMPLES = [
+  'Remind me to submit my resume tomorrow at 9 AM',
+  'Remind me to call Mom on Friday at 6 PM',
+  'Show my tasks',
+  'Mark my resume task as completed',
+  'Delete the mom task',
+]
+
+const sessionId = loadSessionId()
+
+interface Props {
+  botName: string
+  onBotNameChange: (name: string) => void
+  onExchange: () => void
+}
+
+export function ChatPanel({ botName, onBotNameChange, onExchange }: Props) {
+  const [messages, setMessages] = useState<Message[]>([])
+  const [input, setInput] = useState('')
+
+  async function sendMessage(text: string) {
+    setMessages((prev) => [...prev, { text, who: 'user' }])
+    try {
+      const data = await api.chat(text, sessionId, botName)
+      setMessages((prev) => [...prev, { text: data.reply, who: 'bot', intent: data.intent }])
+      if (data.bot_name) onBotNameChange(data.bot_name)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      setMessages((prev) => [...prev, { text: `Error reaching the server: ${message}`, who: 'bot' }])
+    }
+    onExchange()
+  }
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    const text = input.trim()
+    if (!text) return
+    setInput('')
+    void sendMessage(text)
+  }
+
+  function handleRename() {
+    const next = window.prompt('What would you like to call me?', botName)
+    if (next === null) return
+    onBotNameChange(next.trim() || botName)
+  }
+
+  return (
+    <div className="flex h-full flex-col border-r border-border">
+      <header className="flex items-center justify-between border-b border-border px-4 py-3.5">
+        <span className="font-semibold">
+          {botName}
+          <button
+            onClick={handleRename}
+            className="ml-2.5 rounded-md border border-border px-2 py-1 text-xs font-normal text-muted hover:bg-white/5"
+          >
+            Rename
+          </button>
+        </span>
+        <span className="text-xs text-muted">HF intent (optional) + rule-based · /chat</span>
+      </header>
+
+      <div className="flex flex-wrap gap-1.5 px-3.5 pb-2.5 pt-3.5">
+        {EXAMPLES.map((example) => (
+          <button
+            key={example}
+            onClick={() => void sendMessage(example)}
+            className="rounded-md border border-border bg-panel px-2.5 py-1.5 text-xs text-muted hover:bg-white/5"
+          >
+            {example}
+          </button>
+        ))}
+      </div>
+
+      <div className="flex flex-1 flex-col gap-2.5 overflow-y-auto p-4">
+        {messages.map((m, i) => (
+          <div
+            key={i}
+            className={`max-w-[75%] rounded-xl px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap ${
+              m.who === 'user'
+                ? 'self-end rounded-br-sm bg-accent text-white'
+                : 'self-start rounded-bl-sm bg-bubble-bot'
+            }`}
+          >
+            {m.text}
+            {m.intent && <span className="mt-1.5 block text-[11px] text-muted">intent: {m.intent}</span>}
+          </div>
+        ))}
+      </div>
+
+      <form onSubmit={handleSubmit} className="flex gap-2 border-t border-border p-3.5">
+        <input
+          type="text"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder={`Message ${botName}…`}
+          autoComplete="off"
+          className="flex-1 rounded-lg border border-border bg-panel px-3 py-2.5 text-sm outline-none focus:ring-1 focus:ring-accent"
+        />
+        <button
+          type="submit"
+          className="rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-white hover:opacity-90"
+        >
+          Send
+        </button>
+      </form>
+    </div>
+  )
+}

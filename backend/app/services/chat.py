@@ -96,7 +96,10 @@ def _handle_followup(db: Session, pending: PendingClarification, text: str) -> C
     return None
 
 
-def handle_message(db: Session, text: str, session_id: str | None = None) -> ChatResponse:
+def handle_message(
+    db: Session, text: str, session_id: str | None = None, bot_name: str | None = None
+) -> ChatResponse:
+    current_name = bot_name or "Custom To-Do Bot"
     if session_id:
         pending = crud.get_pending(db, session_id)
         if pending:
@@ -188,6 +191,28 @@ def handle_message(db: Session, text: str, session_id: str | None = None) -> Cha
             )
         crud.delete_task(db, task)
         return ChatResponse(reply=f'Deleted "{task.title}".', intent=parsed.intent.value)
+
+    if parsed.intent == Intent.greeting:
+        return ChatResponse(
+            reply=(
+                f"Hey! I'm {current_name}. Try things like "
+                '"remind me to call Mom on Friday at 6 PM", "show my tasks", '
+                '"mark X as done", or "delete Y".'
+            ),
+            intent=parsed.intent.value,
+        )
+
+    if parsed.intent == Intent.set_name:
+        if parsed.proposed_name:
+            return ChatResponse(
+                reply=f"Sure, you can call me {parsed.proposed_name} from now on!",
+                intent=parsed.intent.value,
+                bot_name=parsed.proposed_name,
+            )
+        return ChatResponse(
+            reply=f'You can call me {current_name}. Just say "call me <name>" to rename me.',
+            intent=parsed.intent.value,
+        )
 
     return ChatResponse(
         reply='I didn\'t understand that. Try something like "Remind me to call Mom on Friday at 6 PM."',

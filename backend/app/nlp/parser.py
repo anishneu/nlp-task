@@ -59,6 +59,19 @@ _COMPLETE_INTENT_RE = re.compile(
     re.IGNORECASE,
 )
 _DELETE_INTENT_RE = re.compile(r"^(?:delete|remove|cancel)\b", re.IGNORECASE)
+_GREETING_RE = re.compile(
+    r"^(?:hi|hello|hey|yo|sup|howdy|good morning|good afternoon|good evening)\b", re.IGNORECASE
+)
+_NAME_QUERY_RE = re.compile(
+    r"^what(?:'s| is) your name\??$|^what should i call you\??$", re.IGNORECASE
+)
+_SET_NAME_RE = re.compile(
+    r"^(?:can|could) i call (?:you|u)\s+(.+?)[\?\.!]*$"
+    r"|^(?:i'?ll|i will|i want to) call (?:you|u)\s+(.+?)[\?\.!]*$"
+    r"|^call (?:you|u)\s+(.+?)[\?\.!]*$"
+    r"|^(?:your name is|you'?re now called|you are now called)\s+(.+?)[\?\.!]*$",
+    re.IGNORECASE,
+)
 
 _TRAILING_CONNECTOR_RE = re.compile(
     r"\s+(?:on|at|by|for|every|this|next|that|to)$", re.IGNORECASE
@@ -88,6 +101,7 @@ class ParsedMessage:
     task_query: str | None = None
     status_filter: TaskStatus | None = None
     due_on: date | None = None
+    proposed_name: str | None = None
 
 
 def _parse_date_match(match: re.Match) -> DatePhrase:
@@ -145,6 +159,10 @@ def _clean_task_reference(text: str) -> str:
 
 
 def _classify_intent(text: str) -> Intent:
+    if _GREETING_RE.search(text):
+        return Intent.greeting
+    if _NAME_QUERY_RE.match(text) or _SET_NAME_RE.match(text):
+        return Intent.set_name
     hf_intent = classify_intent_hf(text)
     if hf_intent is not None:
         return hf_intent
@@ -226,5 +244,17 @@ def parse(text: str) -> ParsedMessage:
         return ParsedMessage(
             intent=intent, raw_text=text, task_query=_clean_task_reference(remainder) or None
         )
+
+    if intent == Intent.greeting:
+        return ParsedMessage(intent=intent, raw_text=text)
+
+    if intent == Intent.set_name:
+        match = _SET_NAME_RE.match(text)
+        proposed_name = None
+        if match:
+            proposed_name = next((g for g in match.groups() if g), None)
+            if proposed_name:
+                proposed_name = proposed_name.strip(" \"'")
+        return ParsedMessage(intent=intent, raw_text=text, proposed_name=proposed_name or None)
 
     return ParsedMessage(intent=Intent.unknown, raw_text=text)

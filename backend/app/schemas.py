@@ -36,6 +36,7 @@ class TaskOut(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     session_id: str | None = None
+    bot_name: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -43,3 +44,4 @@ class ChatResponse(BaseModel):
     intent: str
     task: TaskOut | None = None
     tasks: list[TaskOut] | None = None
+    bot_name: str | None = None

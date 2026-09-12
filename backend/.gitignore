@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 *.db
 .env
+
+# Built by `npm run build` in frontend/ (or the Docker image build) — not source.
+app/static/
