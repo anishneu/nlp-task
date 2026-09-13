@@ -1,9 +1,10 @@
-from datetime import datetime, timezone
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Conversation, Message, MessageRole, PendingClarification, Task, TaskStatus
+from app.nlp.hf_reply import generate_title
 from app.schemas import TaskCreate, TaskUpdate
 
 
@@ -138,8 +139,8 @@ def add_message(
     message = Message(conversation_id=conversation_id, role=role, content=content, intent=intent)
     db.add(message)
     if conversation.title is None and role == MessageRole.user:
-        conversation.title = content[:60]
-    conversation.updated_at = datetime.now(timezone.utc)
+        conversation.title = generate_title(content) or content[:60]
+    conversation.updated_at = datetime.now()
     db.commit()
     db.refresh(message)
     return message

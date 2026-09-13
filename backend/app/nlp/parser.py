@@ -177,9 +177,11 @@ def _classify_intent(text: str) -> Intent:
         return Intent.greeting
     if _NAME_QUERY_RE.match(text) or _SET_NAME_RE.match(text):
         return Intent.set_name
-    hf_intent = classify_intent_hf(text)
-    if hf_intent is not None:
-        return hf_intent
+    # Explicit keyword matches (e.g. "remind"/"reminder", "delete", "mark ...
+    # done") are unambiguous in this domain, so they take priority over the
+    # zero-shot classifier — HF is only consulted for phrasing that doesn't
+    # contain one of these deterministic signals (casual chat, indirect
+    # requests), where it's actually needed to disambiguate intent.
     if _DELETE_INTENT_RE.search(text):
         return Intent.delete_task
     if _COMPLETE_INTENT_RE.search(text):
@@ -188,6 +190,9 @@ def _classify_intent(text: str) -> Intent:
         return Intent.list_tasks
     if _CREATE_INTENT_RE.search(text):
         return Intent.create_task
+    hf_intent = classify_intent_hf(text)
+    if hf_intent is not None:
+        return hf_intent
     return Intent.unknown
 
 
