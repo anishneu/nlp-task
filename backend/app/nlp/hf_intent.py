@@ -12,6 +12,8 @@ _LABEL_TO_INTENT = {
     "list or show existing tasks": Intent.list_tasks,
     "mark a task as complete": Intent.complete_task,
     "delete a task": Intent.delete_task,
+    "a greeting or friendly small talk": Intent.greeting,
+    "something unrelated to managing tasks or reminders": Intent.unknown,
 }
 
 

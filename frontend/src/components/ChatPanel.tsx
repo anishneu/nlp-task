@@ -1,12 +1,5 @@
-import { useState } from 'react'
-import { api } from '../api'
-import { loadSessionId } from '../storage'
-
-interface Message {
-  text: string
-  who: 'user' | 'bot'
-  intent?: string
-}
+import { useEffect, useRef, useState } from 'react'
+import type { Message } from '../types'
 
 const EXAMPLES = [
   'Remind me to submit my resume tomorrow at 9 AM',
@@ -16,37 +9,48 @@ const EXAMPLES = [
   'Delete the mom task',
 ]
 
-const sessionId = loadSessionId()
+const LINK_RE = /(https?:\/\/\S+|meet\.google\.com\/\S+|zoom\.us\/\S+)/g
+
+function linkify(text: string) {
+  const parts = text.split(LINK_RE)
+  return parts.map((part, i) =>
+    LINK_RE.test(part) ? (
+      <a
+        key={i}
+        href={part.startsWith('http') ? part : `https://${part}`}
+        target="_blank"
+        rel="noreferrer"
+        className="underline"
+      >
+        {part}
+      </a>
+    ) : (
+      <span key={i}>{part}</span>
+    ),
+  )
+}
 
 interface Props {
   botName: string
   onBotNameChange: (name: string) => void
-  onExchange: () => void
+  messages: Message[]
+  onSend: (text: string) => void
 }
 
-export function ChatPanel({ botName, onBotNameChange, onExchange }: Props) {
-  const [messages, setMessages] = useState<Message[]>([])
+export function ChatPanel({ botName, onBotNameChange, messages, onSend }: Props) {
   const [input, setInput] = useState('')
+  const logRef = useRef<HTMLDivElement>(null)
 
-  async function sendMessage(text: string) {
-    setMessages((prev) => [...prev, { text, who: 'user' }])
-    try {
-      const data = await api.chat(text, sessionId, botName)
-      setMessages((prev) => [...prev, { text: data.reply, who: 'bot', intent: data.intent }])
-      if (data.bot_name) onBotNameChange(data.bot_name)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      setMessages((prev) => [...prev, { text: `Error reaching the server: ${message}`, who: 'bot' }])
-    }
-    onExchange()
-  }
+  useEffect(() => {
+    logRef.current?.scrollTo({ top: logRef.current.scrollHeight })
+  }, [messages])
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     const text = input.trim()
     if (!text) return
     setInput('')
-    void sendMessage(text)
+    onSend(text)
   }
 
   function handleRename() {
@@ -74,7 +78,7 @@ export function ChatPanel({ botName, onBotNameChange, onExchange }: Props) {
         {EXAMPLES.map((example) => (
           <button
             key={example}
-            onClick={() => void sendMessage(example)}
+            onClick={() => onSend(example)}
             className="rounded-md border border-border bg-panel px-2.5 py-1.5 text-xs text-muted hover:bg-white/5"
           >
             {example}
@@ -82,17 +86,17 @@ export function ChatPanel({ botName, onBotNameChange, onExchange }: Props) {
         ))}
       </div>
 
-      <div className="flex flex-1 flex-col gap-2.5 overflow-y-auto p-4">
-        {messages.map((m, i) => (
+      <div ref={logRef} className="flex flex-1 flex-col gap-2.5 overflow-y-auto p-4">
+        {messages.map((m) => (
           <div
-            key={i}
+            key={m.id}
             className={`max-w-[75%] rounded-xl px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap ${
-              m.who === 'user'
+              m.role === 'user'
                 ? 'self-end rounded-br-sm bg-accent text-white'
                 : 'self-start rounded-bl-sm bg-bubble-bot'
             }`}
           >
-            {m.text}
+            {linkify(m.content)}
             {m.intent && <span className="mt-1.5 block text-[11px] text-muted">intent: {m.intent}</span>}
           </div>
         ))}

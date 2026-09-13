@@ -13,9 +13,12 @@ _NUM_WORD = r"(?:a|an|\d+)"
 _TIME = r"\d{1,2}(?::\d{2})?\s*(?:am|pm)|noon|midnight"
 _REL = r"today|tomorrow|tonight"
 _NEXT_THIS = rf"(?:next|this)\s+(?:week|month|year|{_DAY})"
-_IN_OFFSET = rf"in\s+{_NUM_WORD}\s+(?:minute|hour|day|week)s?"
+_IN_OFFSET = rf"in\s+{_NUM_WORD}\s+(?:min(?:ute)?s?|hrs?|hours?|days?|weeks?)"
 _RECUR_DAY = rf"every\s+{_DAY}"
 _RECUR_UNIT = r"every\s+(?:day|week|month)"
+_URL_RE = re.compile(
+    r"https?://\S+|(?:meet\.google\.com|zoom\.us|teams\.microsoft\.com)\S*", re.IGNORECASE
+)
 
 _DATE_PHRASE_RE = re.compile(
     rf"\b(?:{_RECUR_DAY}|{_RECUR_UNIT}|{_REL}|{_NEXT_THIS}|{_DAY}|{_IN_OFFSET})\b(?:\s+at\s+(?:{_TIME})\b)?"
@@ -25,6 +28,7 @@ _DATE_PHRASE_RE = re.compile(
 _IN_OFFSET_RE = re.compile(rf"^{_IN_OFFSET}\b", re.IGNORECASE)
 _TIME_RE = re.compile(rf"\b(?:{_TIME})\b", re.IGNORECASE)
 _RECUR_DAY_RE = re.compile(rf"^every\s+{_DAY}", re.IGNORECASE)
+_NEXT_THIS_DAY_RE = re.compile(rf"^(?:next|this)\s+({_DAY})", re.IGNORECASE)
 _RECUR_UNIT_RE = re.compile(r"^every\s+(day|week|month)\b", re.IGNORECASE)
 _RECURRENCE_LABELS = {"day": "daily", "week": "weekly", "month": "monthly"}
 
@@ -41,9 +45,11 @@ _CREATE_TRIGGERS = [
     r"^i need to\s+",
     r"^schedule\s+",
 ]
-_CREATE_TRIGGER_ANYWHERE_RE = re.compile(r"\bremind me\s+(?:that|to)?\s*", re.IGNORECASE)
+_CREATE_TRIGGER_ANYWHERE_RE = re.compile(
+    r"\bremind me\s+(?:that|to)?\s*|\breminder\s+(?:that|to)?\s*", re.IGNORECASE
+)
 _CREATE_INTENT_RE = re.compile(
-    r"\bremind\b|^add (?:a )?task\b|^create (?:a )?task\b|^i need to\b|^schedule\b|^set a reminder\b",
+    r"\bremind\b|\breminder\b|^add (?:a )?task\b|^create (?:a )?task\b|^i need to\b|^schedule\b|^set a reminder\b",
     re.IGNORECASE,
 )
 _LIST_INTENT_RE = re.compile(
@@ -60,7 +66,9 @@ _COMPLETE_INTENT_RE = re.compile(
 )
 _DELETE_INTENT_RE = re.compile(r"^(?:delete|remove|cancel)\b", re.IGNORECASE)
 _GREETING_RE = re.compile(
-    r"^(?:hi|hello|hey|yo|sup|howdy|good morning|good afternoon|good evening)\b", re.IGNORECASE
+    r"^(?:hi|hello|hey|yo|sup|howdy|good morning|good afternoon|good evening)"
+    r"(?:\s+\w+)?[\s!.,]*$",
+    re.IGNORECASE,
 )
 _NAME_QUERY_RE = re.compile(
     r"^what(?:'s| is) your name\??$|^what should i call you\??$", re.IGNORECASE
@@ -102,6 +110,7 @@ class ParsedMessage:
     status_filter: TaskStatus | None = None
     due_on: date | None = None
     proposed_name: str | None = None
+    link: str | None = None
 
 
 def _parse_date_match(match: re.Match) -> DatePhrase:
@@ -111,12 +120,17 @@ def _parse_date_match(match: re.Match) -> DatePhrase:
 
     unit_match = _RECUR_UNIT_RE.match(phrase)
     day_match = _RECUR_DAY_RE.match(phrase)
+    next_this_day_match = _NEXT_THIS_DAY_RE.match(phrase)
     if unit_match:
         recurrence = _RECURRENCE_LABELS[unit_match.group(1).lower()]
         remainder = phrase[unit_match.end():].strip()
     elif day_match:
         recurrence = "weekly"
         remainder = phrase[len("every "):].strip()
+    elif next_this_day_match:
+        # dateparser can't handle "next/this <weekday>" as a phrase (returns
+        # None) even though the bare weekday works fine — strip the prefix.
+        remainder = phrase[next_this_day_match.start(1):]
 
     parsed = dateparser.parse(remainder, settings={"PREFER_DATES_FROM": "future"}) if remainder else None
     if parsed is None and recurrence is None:
@@ -194,6 +208,10 @@ def parse(text: str) -> ParsedMessage:
 
     if intent == Intent.create_task:
         remainder = _strip_create_trigger(text)
+        url_match = _URL_RE.search(remainder)
+        link = url_match.group(0).rstrip(".,;:!?") if url_match else None
+        if url_match:
+            remainder = remainder[: url_match.start()] + remainder[url_match.end():]
         title, date_phrase = _split_on_date_phrase(remainder)
         ambiguous = (date_phrase.due_at is not None and not date_phrase.has_explicit_time) or (
             date_phrase.recurrence is not None and date_phrase.due_at is None
@@ -205,6 +223,7 @@ def parse(text: str) -> ParsedMessage:
             due_at=date_phrase.due_at,
             date_is_ambiguous=ambiguous,
             recurrence=date_phrase.recurrence,
+            link=link,
         )
 
     if intent == Intent.list_tasks:
