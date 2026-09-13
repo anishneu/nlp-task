@@ -1,4 +1,4 @@
-export const DEFAULT_BOT_NAME = 'Custom To-Do Bot'
+const DEFAULT_BOT_NAME = 'Custom To-Do Bot'
 
 function safeGet(key: string): string | null {
   try {
@@ -16,12 +16,16 @@ function safeSet(key: string, value: string): void {
   }
 }
 
-export function loadSessionId(): string {
-  const existing = safeGet('sessionId')
+export function loadConversationId(): string {
+  const existing = safeGet('conversationId')
   if (existing) return existing
   const fresh = crypto.randomUUID()
-  safeSet('sessionId', fresh)
+  safeSet('conversationId', fresh)
   return fresh
+}
+
+export function saveConversationId(id: string): void {
+  safeSet('conversationId', id)
 }
 
 export function loadBotName(): string {

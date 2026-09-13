@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.database import Base, engine
-from app.routers import chat, reminders, tasks
+from app.routers import chat, conversations, reminders, tasks
 from app.scheduler import start_scheduler, stop_scheduler
 
 Base.metadata.create_all(bind=engine)
@@ -16,6 +16,7 @@ app = FastAPI(title="Custom To-Do Bot API")
 app.include_router(tasks.router)
 app.include_router(chat.router)
 app.include_router(reminders.router)
+app.include_router(conversations.router)
 app.mount(
     "/assets", StaticFiles(directory=STATIC_DIR / "assets", check_dir=False), name="assets"
 )

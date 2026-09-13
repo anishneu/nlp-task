@@ -5,7 +5,9 @@ import dateparser
 from sqlalchemy.orm import Session
 
 from app import crud
-from app.models import ClarificationKind, PendingClarification, Task, TaskStatus
+from app.models import ClarificationKind, MessageRole, PendingClarification, Task, TaskStatus
+from app.nlp.hf_reply import rephrase_reply
+from app.nlp.hf_similarity import find_best_match_hf
 from app.nlp.intents import Intent
 from app.nlp.parser import parse
 from app.schemas import ChatResponse, TaskCreate, TaskOut, TaskUpdate
@@ -23,10 +25,11 @@ def _format_due(due_at) -> str:
     return due_at.strftime("%a, %b %d at %I:%M %p") if due_at else ""
 
 
-def _format_confirmation(title: str, due_at, recurrence: str | None) -> str:
+def _format_confirmation(title: str, due_at, recurrence: str | None, link: str | None) -> str:
     when = f" for {_format_due(due_at)}" if due_at else ""
     repeats = f", repeating {recurrence}" if recurrence else ""
-    return f'Got it — I\'ve scheduled "{title}"{when}{repeats}.'
+    link_note = f" Join here: {link}" if link else ""
+    return f'Got it — I\'ve scheduled "{title}"{when}{repeats}.{link_note}'
 
 
 def _keywords(text: str) -> set[str]:
@@ -38,6 +41,10 @@ def _resolve_choice(text: str, candidates: list[Task]) -> Task | None:
     index = _ORDINAL_WORDS.get(lowered)
     if index is not None and index < len(candidates):
         return candidates[index]
+
+    hf_index = find_best_match_hf(text, [c.title for c in candidates])
+    if hf_index is not None:
+        return candidates[hf_index]
 
     direct = [c for c in candidates if lowered in c.title.lower() or c.title.lower() in lowered]
     if len(direct) == 1:
@@ -69,10 +76,16 @@ def _handle_followup(db: Session, pending: PendingClarification, text: str) -> C
         if parsed_dt is None:
             return None
         task = crud.create_task(
-            db, TaskCreate(title=pending.title, due_at=parsed_dt, recurrence=pending.recurrence)
+            db,
+            TaskCreate(
+                title=pending.title,
+                due_at=parsed_dt,
+                recurrence=pending.recurrence,
+                link=pending.link,
+            ),
         )
         return ChatResponse(
-            reply=_format_confirmation(task.title, task.due_at, task.recurrence),
+            reply=_format_confirmation(task.title, task.due_at, task.recurrence, task.link),
             intent=Intent.create_task.value,
             task=TaskOut.model_validate(task),
         )
@@ -96,15 +109,15 @@ def _handle_followup(db: Session, pending: PendingClarification, text: str) -> C
     return None
 
 
-def handle_message(
-    db: Session, text: str, session_id: str | None = None, bot_name: str | None = None
+def _process_message(
+    db: Session, text: str, conversation_id: str | None, bot_name: str | None
 ) -> ChatResponse:
     current_name = bot_name or "Custom To-Do Bot"
-    if session_id:
-        pending = crud.get_pending(db, session_id)
+    if conversation_id:
+        pending = crud.get_pending(db, conversation_id)
         if pending:
             response = _handle_followup(db, pending, text)
-            crud.clear_pending(db, session_id)
+            crud.clear_pending(db, conversation_id)
             if response is not None:
                 return response
             # Couldn't interpret as an answer to the pending question — treat
@@ -120,24 +133,31 @@ def handle_message(
             )
         if parsed.date_is_ambiguous:
             base_date = parsed.due_at.date() if parsed.due_at else date.today()
-            if session_id:
+            if conversation_id:
                 crud.set_pending(
                     db,
-                    session_id,
+                    conversation_id,
                     kind=ClarificationKind.awaiting_time,
                     title=parsed.title,
                     base_date=base_date.isoformat(),
                     recurrence=parsed.recurrence,
+                    link=parsed.link,
                 )
             return ChatResponse(
                 reply=f'What time should I remind you to "{parsed.title}"?',
                 intent=parsed.intent.value,
             )
         task = crud.create_task(
-            db, TaskCreate(title=parsed.title, due_at=parsed.due_at, recurrence=parsed.recurrence)
+            db,
+            TaskCreate(
+                title=parsed.title,
+                due_at=parsed.due_at,
+                recurrence=parsed.recurrence,
+                link=parsed.link,
+            ),
         )
         return ChatResponse(
-            reply=_format_confirmation(task.title, task.due_at, task.recurrence),
+            reply=_format_confirmation(task.title, task.due_at, task.recurrence, task.link),
             intent=parsed.intent.value,
             task=TaskOut.model_validate(task),
         )
@@ -162,15 +182,20 @@ def handle_message(
             return ChatResponse(reply="Which task do you mean?", intent=parsed.intent.value)
         matches = crud.find_tasks_by_title(db, parsed.task_query)
         if not matches:
+            pending_tasks = crud.list_tasks(db, status=TaskStatus.pending)
+            hf_index = find_best_match_hf(parsed.task_query, [t.title for t in pending_tasks])
+            if hf_index is not None:
+                matches = [pending_tasks[hf_index]]
+        if not matches:
             return ChatResponse(
                 reply=f'I couldn\'t find a task matching "{parsed.task_query}".',
                 intent=parsed.intent.value,
             )
         if len(matches) > 1:
-            if session_id:
+            if conversation_id:
                 crud.set_pending(
                     db,
-                    session_id,
+                    conversation_id,
                     kind=ClarificationKind.awaiting_task_choice,
                     action=parsed.intent.value,
                     candidate_ids=",".join(str(m.id) for m in matches),
@@ -194,11 +219,7 @@ def handle_message(
 
     if parsed.intent == Intent.greeting:
         return ChatResponse(
-            reply=(
-                f"Hey! I'm {current_name}. Try things like "
-                '"remind me to call Mom on Friday at 6 PM", "show my tasks", '
-                '"mark X as done", or "delete Y".'
-            ),
+            reply=f"Hi there! I'm {current_name}, your virtual chatbot assistant. How may I help you?",
             intent=parsed.intent.value,
         )
 
@@ -218,3 +239,14 @@ def handle_message(
         reply='I didn\'t understand that. Try something like "Remind me to call Mom on Friday at 6 PM."',
         intent=parsed.intent.value,
     )
+
+
+def handle_message(
+    db: Session, text: str, conversation_id: str | None = None, bot_name: str | None = None
+) -> ChatResponse:
+    response = _process_message(db, text, conversation_id, bot_name)
+    response.reply = rephrase_reply(bot_name or "Custom To-Do Bot", response.reply)
+    if conversation_id:
+        crud.add_message(db, conversation_id, MessageRole.user, text)
+        crud.add_message(db, conversation_id, MessageRole.bot, response.reply, response.intent)
+    return response

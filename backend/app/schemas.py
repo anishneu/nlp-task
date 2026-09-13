@@ -2,7 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
-from app.models import TaskStatus
+from app.models import MessageRole, TaskStatus
 
 
 class TaskCreate(BaseModel):
@@ -10,6 +10,7 @@ class TaskCreate(BaseModel):
     description: str | None = None
     due_at: datetime | None = None
     recurrence: str | None = None
+    link: str | None = None
 
 
 class TaskUpdate(BaseModel):
@@ -18,6 +19,8 @@ class TaskUpdate(BaseModel):
     due_at: datetime | None = None
     recurrence: str | None = None
     status: TaskStatus | None = None
+    starred: bool | None = None
+    link: str | None = None
 
 
 class TaskOut(BaseModel):
@@ -29,13 +32,15 @@ class TaskOut(BaseModel):
     due_at: datetime | None
     recurrence: str | None
     status: TaskStatus
+    starred: bool
+    link: str | None
     created_at: datetime
     updated_at: datetime
 
 
 class ChatRequest(BaseModel):
     message: str
-    session_id: str | None = None
+    conversation_id: str | None = None
     bot_name: str | None = None
 
 
@@ -45,3 +50,22 @@ class ChatResponse(BaseModel):
     task: TaskOut | None = None
     tasks: list[TaskOut] | None = None
     bot_name: str | None = None
+
+
+class ConversationOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    title: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class MessageOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    role: MessageRole
+    content: str
+    intent: str | None
+    created_at: datetime
