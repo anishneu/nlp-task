@@ -21,8 +21,13 @@ _URL_RE = re.compile(
 )
 
 _DATE_PHRASE_RE = re.compile(
-    rf"\b(?:{_RECUR_DAY}|{_RECUR_UNIT}|{_REL}|{_NEXT_THIS}|{_DAY}|{_IN_OFFSET})\b(?:\s+at\s+(?:{_TIME})\b)?"
-    rf"|\b(?:{_TIME})\b",
+    # "friday at 5pm" / "friday 5pm" (the "at" is optional so a time right
+    # after a date word — the far more common way people actually phrase
+    # it — isn't left behind for dateparser to fail to a bare weekday).
+    rf"\b(?:{_RECUR_DAY}|{_RECUR_UNIT}|{_REL}|{_NEXT_THIS}|{_DAY}|{_IN_OFFSET})\b(?:\s+(?:at\s+)?(?:{_TIME})\b)?"
+    # "at 5pm friday" / "5pm friday" — time-first phrasing, with an
+    # optional trailing date word so it also matches a bare time.
+    rf"|\b(?:at\s+)?(?:{_TIME})\b(?:\s+(?:{_REL}|{_NEXT_THIS}|{_DAY}))?",
     re.IGNORECASE,
 )
 _IN_OFFSET_RE = re.compile(rf"^{_IN_OFFSET}\b", re.IGNORECASE)
@@ -131,6 +136,11 @@ def _parse_date_match(match: re.Match) -> DatePhrase:
         # dateparser can't handle "next/this <weekday>" as a phrase (returns
         # None) even though the bare weekday works fine — strip the prefix.
         remainder = phrase[next_this_day_match.start(1):]
+
+    # dateparser also can't handle "tonight" on its own (returns None) even
+    # though "today"/"tomorrow" work fine — treat it as "today" for date
+    # resolution; the actual time comes from the TIME match elsewhere.
+    remainder = re.sub(r"\btonight\b", "today", remainder, flags=re.IGNORECASE)
 
     parsed = dateparser.parse(remainder, settings={"PREFER_DATES_FROM": "future"}) if remainder else None
     if parsed is None and recurrence is None:

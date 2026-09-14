@@ -3,5 +3,7 @@
 **/*.pyc
 **/*.db
 **/.env
+.git
 backend/venv
+backend/app/static
 frontend/dist

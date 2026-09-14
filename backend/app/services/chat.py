@@ -245,7 +245,14 @@ def handle_message(
     db: Session, text: str, conversation_id: str | None = None, bot_name: str | None = None
 ) -> ChatResponse:
     response = _process_message(db, text, conversation_id, bot_name)
-    response.reply = rephrase_reply(bot_name or "Custom To-Do Bot", response.reply)
+    if response.intent != Intent.unknown.value:
+        # The "unknown" fallback embeds a quoted usage example ("Remind me
+        # to call Mom...") — small rephrasing models sometimes read that as
+        # literal context and hallucinate a fact from it (e.g. asking when
+        # to "call Mom" in a conversation that never mentioned Mom). The
+        # generic fallback doesn't gain much from rephrasing anyway, so it's
+        # left as the reliable plain template instead of risking that.
+        response.reply = rephrase_reply(bot_name or "Custom To-Do Bot", response.reply)
     if conversation_id:
         crud.add_message(db, conversation_id, MessageRole.user, text)
         crud.add_message(db, conversation_id, MessageRole.bot, response.reply, response.intent)
