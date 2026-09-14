@@ -4,7 +4,7 @@ from datetime import date, datetime, time
 import dateparser
 from sqlalchemy.orm import Session
 
-from app import crud
+from app import clock, crud
 from app.models import ClarificationKind, MessageRole, PendingClarification, Task, TaskStatus
 from app.nlp.hf_reply import rephrase_reply
 from app.nlp.hf_similarity import find_best_match_hf
@@ -132,16 +132,31 @@ def _process_message(
             # Couldn't interpret as an answer to the pending question — treat
             # this message as a fresh command instead of getting stuck.
 
-    parsed = parse(text)
+    parsed = parse(text, current_name)
 
     if parsed.intent == Intent.create_task:
+        if parsed.task_specs:
+            tasks = [
+                crud.create_task(
+                    db,
+                    TaskCreate(title=s.title, due_at=s.due_at, recurrence=s.recurrence, link=s.link),
+                )
+                for s in parsed.task_specs
+            ]
+            lines = [f'- "{t.title}" for {_format_due(t.due_at)}' for t in tasks]
+            reply = f"Got it — I've scheduled {len(tasks)} things:\n" + "\n".join(lines)
+            return ChatResponse(
+                reply=reply,
+                intent=parsed.intent.value,
+                tasks=[TaskOut.model_validate(t) for t in tasks],
+            )
         if not parsed.title:
             return ChatResponse(
                 reply="What would you like the reminder to be about?",
                 intent=parsed.intent.value,
             )
         if parsed.date_is_ambiguous:
-            base_date = parsed.due_at.date() if parsed.due_at else date.today()
+            base_date = parsed.due_at.date() if parsed.due_at else clock.now().date()
             if conversation_id:
                 crud.set_pending(
                     db,
@@ -227,8 +242,10 @@ def _process_message(
         return ChatResponse(reply=f'Deleted "{task.title}".', intent=parsed.intent.value)
 
     if parsed.intent == Intent.greeting:
+        time_of_day_match = re.search(r"\bgood (morning|afternoon|evening)\b", text, re.IGNORECASE)
+        greeting = f"Good {time_of_day_match.group(1).lower()}!" if time_of_day_match else "Hi there!"
         return ChatResponse(
-            reply=f"Hi there! I'm {current_name}, your virtual chatbot assistant. How may I help you?",
+            reply=f"{greeting} I'm {current_name}, your virtual chatbot assistant. How may I help you?",
             intent=parsed.intent.value,
         )
 
@@ -254,13 +271,22 @@ def handle_message(
     db: Session, text: str, conversation_id: str | None = None, bot_name: str | None = None
 ) -> ChatResponse:
     response = _process_message(db, text, conversation_id, bot_name)
-    if response.intent != Intent.unknown.value:
+    if response.intent == Intent.unknown.value:
         # The "unknown" fallback embeds a quoted usage example ("Remind me
         # to call Mom...") — small rephrasing models sometimes read that as
         # literal context and hallucinate a fact from it (e.g. asking when
         # to "call Mom" in a conversation that never mentioned Mom). The
         # generic fallback doesn't gain much from rephrasing anyway, so it's
         # left as the reliable plain template instead of risking that.
+        pass
+    elif response.intent == Intent.greeting.value:
+        # The rephrase prompt only promises to preserve "facts" (names,
+        # dates, times, links) — a "Good morning!" echo isn't one of those,
+        # so the model is free to (and did, in testing) swap it for a
+        # generic "Hey there!", silently undoing the whole point of
+        # matching the user's own greeting. Keep this one deterministic.
+        pass
+    else:
         response.reply = rephrase_reply(bot_name or "Custom To-Do Bot", response.reply)
     if conversation_id:
         crud.add_message(db, conversation_id, MessageRole.user, text)

@@ -11,6 +11,13 @@ const EXAMPLES = [
 
 const LINK_RE = /(https?:\/\/\S+|meet\.google\.com\/\S+|zoom\.us\/\S+)/g
 
+function formatTime(iso: string) {
+  const d = new Date(iso)
+  const datePart = d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })
+  const timePart = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  return `${datePart} · ${timePart}`
+}
+
 function linkify(text: string) {
   const parts = text.split(LINK_RE)
   return parts.map((part, i) =>
@@ -37,20 +44,41 @@ interface Props {
   onSend: (text: string) => void
 }
 
+const MAX_INPUT_HEIGHT_PX = 160
+
 export function ChatPanel({ botName, onBotNameChange, messages, onSend }: Props) {
   const [input, setInput] = useState('')
   const logRef = useRef<HTMLDivElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight })
   }, [messages])
 
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
+  useEffect(() => {
+    const el = textareaRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight, MAX_INPUT_HEIGHT_PX)}px`
+  }, [input])
+
+  function submitInput() {
     const text = input.trim()
     if (!text) return
     setInput('')
     onSend(text)
+  }
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    submitInput()
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      submitInput()
+    }
   }
 
   function handleRename() {
@@ -86,7 +114,7 @@ export function ChatPanel({ botName, onBotNameChange, messages, onSend }: Props)
         ))}
       </div>
 
-      <div ref={logRef} className="flex flex-1 flex-col gap-2.5 overflow-y-auto p-4">
+      <div ref={logRef} className="chat-scroll flex flex-1 flex-col gap-2.5 overflow-y-auto p-4">
         {messages.map((m) => (
           <div
             key={m.id}
@@ -97,23 +125,31 @@ export function ChatPanel({ botName, onBotNameChange, messages, onSend }: Props)
             }`}
           >
             {linkify(m.content)}
-            {m.intent && <span className="mt-1.5 block text-[11px] text-muted">intent: {m.intent}</span>}
+            <span
+              className={`mt-1.5 block text-[11px] ${
+                m.role === 'user' ? 'text-white/70' : 'text-muted'
+              }`}
+            >
+              {formatTime(m.created_at)}
+            </span>
           </div>
         ))}
       </div>
 
       <form onSubmit={handleSubmit} className="flex gap-2 border-t border-border p-3.5">
-        <input
-          type="text"
+        <textarea
+          ref={textareaRef}
+          rows={1}
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder={`Message ${botName}…`}
-          autoComplete="off"
-          className="flex-1 rounded-lg border border-border bg-panel px-3 py-2.5 text-sm outline-none focus:ring-1 focus:ring-accent"
+          onKeyDown={handleKeyDown}
+          placeholder={`Message ${botName}… (Shift+Enter for a new line)`}
+          className="chat-scroll flex-1 resize-none rounded-lg border border-border bg-panel px-3 py-2.5 text-sm leading-relaxed outline-none focus:ring-1 focus:ring-accent"
+          style={{ maxHeight: MAX_INPUT_HEIGHT_PX }}
         />
         <button
           type="submit"
-          className="rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-white hover:opacity-90"
+          className="self-end rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-white hover:opacity-90"
         >
           Send
         </button>

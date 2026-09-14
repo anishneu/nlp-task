@@ -1,9 +1,9 @@
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from dateutil.relativedelta import relativedelta
 
-from app import crud
+from app import clock, crud
 from app.database import SessionLocal
 from app.notifications import send_due_email
 
@@ -34,7 +34,7 @@ def run_reminder_tick() -> None:
     """
     db = SessionLocal()
     try:
-        now = datetime.now()
+        now = clock.now()
 
         for task in crud.list_unnotified_due_tasks(db, now):
             send_due_email(task)

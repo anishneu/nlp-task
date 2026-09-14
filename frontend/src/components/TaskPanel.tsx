@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import type { Task } from '../types'
 import { CalendarView } from './CalendarView'
+import { TaskDetailModal } from './TaskDetailModal'
 
 type StatusFilter = 'all' | 'pending' | 'completed'
 type View = 'list' | 'calendar'
@@ -45,6 +46,7 @@ export function TaskPanel({ tasks, onRefresh, onComplete, onDelete, onToggleStar
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [starredOnly, setStarredOnly] = useState(false)
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null)
 
   const filtered = useMemo(() => {
     let result = tasks
@@ -128,7 +130,12 @@ export function TaskPanel({ tasks, onRefresh, onComplete, onDelete, onToggleStar
             </button>
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-1.5 text-sm font-medium">
-                <span className={t.status === 'completed' ? 'line-through' : ''}>{t.title}</span>
+                <button
+                  onClick={() => setSelectedTask(t)}
+                  className={`text-left hover:underline ${t.status === 'completed' ? 'line-through' : ''}`}
+                >
+                  {t.title}
+                </button>
                 <span className="whitespace-nowrap rounded-full bg-border px-1.5 py-0.5 text-[10px] text-muted">
                   {t.status}
                 </span>
@@ -171,6 +178,16 @@ export function TaskPanel({ tasks, onRefresh, onComplete, onDelete, onToggleStar
           </div>
         ))}
       </div>
+
+      {selectedTask && (
+        <TaskDetailModal
+          task={tasks.find((t) => t.id === selectedTask.id) ?? selectedTask}
+          onClose={() => setSelectedTask(null)}
+          onComplete={onComplete}
+          onDelete={onDelete}
+          onToggleStar={onToggleStar}
+        />
+      )}
     </div>
   )
 }

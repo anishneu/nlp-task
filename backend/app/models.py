@@ -4,6 +4,7 @@ from datetime import datetime
 from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app import clock
 from app.database import Base
 
 
@@ -34,9 +35,9 @@ class Task(Base):
     status: Mapped[TaskStatus] = mapped_column(Enum(TaskStatus), default=TaskStatus.pending)
     starred: Mapped[bool] = mapped_column(Boolean, default=False)
     link: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(), default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(), default=clock.now)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(), default=datetime.now, onupdate=datetime.now
+        DateTime(), default=clock.now, onupdate=clock.now
     )
 
 
@@ -54,7 +55,7 @@ class PendingClarification(Base):
     link: Mapped[str | None] = mapped_column(String(500), nullable=True)
     action: Mapped[str | None] = mapped_column(String(20), nullable=True)
     candidate_ids: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(), default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(), default=clock.now)
 
 
 class Conversation(Base):
@@ -62,9 +63,9 @@ class Conversation(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(), default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(), default=clock.now)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(), default=datetime.now, onupdate=datetime.now
+        DateTime(), default=clock.now, onupdate=clock.now
     )
 
 
@@ -78,4 +79,4 @@ class Message(Base):
     role: Mapped[MessageRole] = mapped_column(Enum(MessageRole))
     content: Mapped[str] = mapped_column(Text)
     intent: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(), default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(), default=clock.now)

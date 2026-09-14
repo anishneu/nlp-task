@@ -10,6 +10,7 @@ services:
       HF_TOKEN: ${HF_TOKEN:-}
       HF_INTENT_MODEL: ${HF_INTENT_MODEL:-facebook/bart-large-mnli}
       HF_REPLY_MODEL: ${HF_REPLY_MODEL:-google/gemma-2-2b-it:featherless-ai}
+      APP_TIMEZONE: ${APP_TIMEZONE:-}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USER: ${SMTP_USER:-}

@@ -4,6 +4,7 @@ from datetime import date, datetime, timedelta
 
 import dateparser
 
+from app import clock
 from app.models import TaskStatus
 from app.nlp.hf_intent import classify_intent_hf
 from app.nlp.intents import Intent
@@ -57,7 +58,7 @@ _CREATE_TRIGGERS = [
     r"^schedule\s+",
 ]
 _CREATE_TRIGGER_ANYWHERE_RE = re.compile(
-    r"\bremind me\s+(?:that|to)?\s*|\breminder\s+(?:that|to)?\s*", re.IGNORECASE
+    r"\bremind me\b(?:\s+(?:that|to|of))?\s*|\breminder\b(?:\s+(?:that|to|of))?\s*", re.IGNORECASE
 )
 _CREATE_INTENT_RE = re.compile(
     r"\bremind\b|\breminder\b|^add (?:a )?task\b|^create (?:a )?task\b|^i need to\b|^schedule\b|^set a reminder\b",
@@ -76,16 +77,19 @@ _COMPLETE_INTENT_RE = re.compile(
     re.IGNORECASE,
 )
 _DELETE_INTENT_RE = re.compile(r"^(?:delete|remove|cancel)\b", re.IGNORECASE)
+_TIME_GREETING = r"good (?:morning|afternoon|evening)"
 _GREETING_RE = re.compile(
-    r"^(?:hi|hello|hey|yo|sup|howdy|good morning|good afternoon|good evening)"
-    r"(?:\s+\w+)?[\s!.,]*$",
+    rf"^(?:hi|hello|hey|yo|sup|howdy|{_TIME_GREETING})"
+    rf"(?:[\s,]+\w+)?"  # optional name, e.g. "Hi Serene"
+    rf"(?:[\s,]+{_TIME_GREETING})?"  # optional trailing "...  good morning"
+    rf"[\s!.,]*$",
     re.IGNORECASE,
 )
 _NAME_QUERY_RE = re.compile(
     r"^what(?:'s| is) your name\??$|^what should i call you\??$", re.IGNORECASE
 )
 _SET_NAME_RE = re.compile(
-    r"^(?:can|could) i call (?:you|u)\s+(.+?)[\?\.!]*$"
+    r"^(?:can|could|may) i call (?:you|u)\s+(.+?)[\?\.!]*$"
     r"|^(?:i'?ll|i will|i want to) call (?:you|u)\s+(.+?)[\?\.!]*$"
     r"|^call (?:you|u)\s+(.+?)[\?\.!]*$"
     r"|^(?:your name is|you'?re now called|you are now called)\s+(.+?)[\?\.!]*$",
@@ -101,12 +105,62 @@ _LEADING_CONNECTOR_RE = re.compile(
 _LEADING_ARTICLE_RE = re.compile(r"^(?:my|the)\s+", re.IGNORECASE)
 _TRAILING_NOUN_RE = re.compile(r"\s+(?:task|reminder)$", re.IGNORECASE)
 
+_CLAUSE_SPLIT_RE = re.compile(
+    r"\bafter which\b|\band then\b|\bso that\b|,?\s*\bthen\b"
+    r"|\band (?:i(?:'ve| have)?\s+)?also\b"
+    # Bare "and" is deliberately last/least specific — on its own it's just
+    # as likely to join a compound object ("buy milk and eggs") as two
+    # separate events. Splitting on it is only safe because every resulting
+    # clause still has to resolve with its own explicit time below; "milk
+    # and eggs" fails that (neither half has a time) and falls back to one
+    # task, same as if this alternative didn't exist.
+    r"|\band\b",
+    re.IGNORECASE,
+)
+_CLAUSE_FILLER_RE = re.compile(
+    r"^(?:and|so|that)\s+"
+    r"|^i(?:'ve| have| had|'ll| will)?\s+(?:got to\s+|got\s+|need to\s+|could\s+|can\s+)?"
+    r"|^(?:could|can|got)\s+"
+    r"|^an?\s+",
+    re.IGNORECASE,
+)
+
+
+def _strip_clause_filler(text: str) -> str:
+    text = text.strip(" ,.")
+    while True:
+        stripped = _CLAUSE_FILLER_RE.sub("", text, count=1).strip(" ,.")
+        if stripped == text:
+            break
+        text = stripped
+    return text
+
+
+def _split_into_clauses(text: str) -> list[str]:
+    """Splits a compound message like "X at 2pm, then Y at 3pm" into its
+    separate event clauses on common sequencing conjunctions.
+
+    Deliberately conservative — no bare commas or "and" (too likely to
+    misfire on innocuous phrasing like "buy milk and eggs") — so most
+    single-task messages come back as a single untouched clause.
+    """
+    parts = _CLAUSE_SPLIT_RE.split(text)
+    return [_strip_clause_filler(p) for p in parts if p and p.strip(" ,.")]
+
 
 @dataclass
 class DatePhrase:
     due_at: datetime | None
     has_explicit_time: bool
     recurrence: str | None = None
+
+
+@dataclass
+class TaskSpec:
+    title: str
+    due_at: datetime | None
+    recurrence: str | None
+    link: str | None
 
 
 @dataclass
@@ -122,6 +176,12 @@ class ParsedMessage:
     due_on: date | None = None
     proposed_name: str | None = None
     link: str | None = None
+    # Populated instead of the single title/due_at/... fields above when the
+    # message describes several distinct events, each with its own clear
+    # time (e.g. "interview at 2pm, then a shower at 3pm") — see
+    # _split_into_clauses. None/empty means "just one task, use the fields
+    # above as usual".
+    task_specs: list[TaskSpec] | None = None
 
 
 def _parse_date_match(match: re.Match) -> DatePhrase:
@@ -148,7 +208,14 @@ def _parse_date_match(match: re.Match) -> DatePhrase:
     # resolution; the actual time comes from the TIME match elsewhere.
     remainder = re.sub(r"\btonight\b", "today", remainder, flags=re.IGNORECASE)
 
-    parsed = dateparser.parse(remainder, settings={"PREFER_DATES_FROM": "future"}) if remainder else None
+    parsed = (
+        dateparser.parse(
+            remainder,
+            settings={"PREFER_DATES_FROM": "future", "RELATIVE_BASE": clock.now()},
+        )
+        if remainder
+        else None
+    )
     if parsed is None and recurrence is None:
         return DatePhrase(due_at=None, has_explicit_time=False)
     if recurrence == "weekday" and parsed is not None:
@@ -162,8 +229,26 @@ def _parse_date_match(match: re.Match) -> DatePhrase:
     return DatePhrase(due_at=parsed, has_explicit_time=is_precise, recurrence=recurrence)
 
 
+def _find_best_date_match(text: str) -> re.Match | None:
+    matches = list(_DATE_PHRASE_RE.finditer(text))
+    if not matches:
+        return None
+    # Prefer whichever match actually resolves with an explicit time or a
+    # recurrence over an earlier bare relative word that just happens to
+    # appear first in the sentence — e.g. "tasks to work on today, then an
+    # interview at 2pm" shouldn't lock onto "today" (no time of its own)
+    # when "2pm" later in the same sentence is the real due time.
+    for m in matches:
+        if _parse_date_match(m).has_explicit_time:
+            return m
+    for m in matches:
+        if _parse_date_match(m).recurrence is not None:
+            return m
+    return matches[0]
+
+
 def _extract_date_phrase(text: str) -> DatePhrase:
-    match = _DATE_PHRASE_RE.search(text)
+    match = _find_best_date_match(text)
     if not match:
         return DatePhrase(due_at=None, has_explicit_time=False)
     return _parse_date_match(match)
@@ -181,7 +266,7 @@ def _clean_title(text: str) -> str:
 
 
 def _split_on_date_phrase(text: str) -> tuple[str, DatePhrase]:
-    match = _DATE_PHRASE_RE.search(text)
+    match = _find_best_date_match(text)
     if not match:
         return _clean_title(text), DatePhrase(due_at=None, has_explicit_time=False)
     date_phrase = _parse_date_match(match)
@@ -226,16 +311,61 @@ def _strip_create_trigger(text: str) -> str:
             return text[match.end():]
     match = _CREATE_TRIGGER_ANYWHERE_RE.search(text)
     if match:
-        return text[match.end():]
+        before = text[: match.start()].strip(" ,.")
+        after = text[match.end():].strip(" ,.")
+        # The trigger phrase can trail AFTER the real content instead of
+        # leading it ("...birthday party at 5:30pm. Can u put a reminder
+        # for me") — taking "after" unconditionally produced junk titles
+        # like "me" in that case. Use whichever side actually has
+        # substance; a short trailing "for me"/"please" is exactly the
+        # filler this is meant to strip, not the task itself.
+        if len(after.split()) < 3 and len(before.split()) > len(after.split()):
+            return before
+        return after
     return text
 
 
-def parse(text: str) -> ParsedMessage:
+def parse(text: str, bot_name: str | None = None) -> ParsedMessage:
     text = text.strip()
+    if bot_name:
+        # "Serene, I have an interview..." / "Serene, may I call u Celine?" —
+        # a leading vocative address breaks every intent regex anchored at
+        # the start of the string (^), which is most of them. Strip it
+        # before classifying anything else.
+        text = re.sub(rf"^{re.escape(bot_name)}\s*[,!]\s*", "", text, count=1, flags=re.IGNORECASE)
     intent = _classify_intent(text)
 
     if intent == Intent.create_task:
         remainder = _strip_create_trigger(text)
+
+        clauses = _split_into_clauses(remainder)
+        if len(clauses) > 1:
+            specs = []
+            for clause in clauses:
+                clause_url_match = _URL_RE.search(clause)
+                clause_link = clause_url_match.group(0).rstrip(".,;:!?") if clause_url_match else None
+                if clause_url_match:
+                    clause = clause[: clause_url_match.start()] + clause[clause_url_match.end():]
+                clause_title, clause_date = _split_on_date_phrase(clause)
+                # Only auto-split when EVERY clause resolves with its own
+                # clear title and explicit time — otherwise a partially
+                # ambiguous split would need per-clause clarification, which
+                # the single-slot pending-clarification flow can't express.
+                # Fall back to treating the whole message as one task instead.
+                if not clause_title or clause_date.due_at is None or not clause_date.has_explicit_time:
+                    specs = None
+                    break
+                specs.append(
+                    TaskSpec(
+                        title=clause_title,
+                        due_at=clause_date.due_at,
+                        recurrence=clause_date.recurrence,
+                        link=clause_link,
+                    )
+                )
+            if specs and len(specs) > 1:
+                return ParsedMessage(intent=intent, raw_text=text, task_specs=specs)
+
         url_match = _URL_RE.search(remainder)
         link = url_match.group(0).rstrip(".,;:!?") if url_match else None
         if url_match:

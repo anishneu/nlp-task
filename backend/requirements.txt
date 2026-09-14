@@ -7,3 +7,10 @@ dateparser==1.4.3
 python-dateutil==2.9.0.post0
 requests==2.32.3
 apscheduler==3.10.4
+# zoneinfo (used by APP_TIMEZONE) needs an IANA time zone database. It's
+# only pulled in transitively today via tzlocal, and only on Windows
+# (tzlocal's tzdata dependency is Windows-only) — the Linux Docker image
+# has no such guarantee, and python:3.12-slim's minimal Debian base isn't
+# certain to ship /usr/share/zoneinfo either. Depend on it directly so
+# APP_TIMEZONE is reliable everywhere, not just by transitive accident.
+tzdata==2026.4
