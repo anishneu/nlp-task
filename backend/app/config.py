@@ -14,10 +14,9 @@ APP_TIMEZONE = os.getenv("APP_TIMEZONE")
 HF_TOKEN = os.getenv("HF_TOKEN")
 HF_INTENT_MODEL = os.getenv("HF_INTENT_MODEL", "facebook/bart-large-mnli")
 HF_REPLY_MODEL = os.getenv("HF_REPLY_MODEL", "google/gemma-2-2b-it:featherless-ai")
-
-SMTP_HOST = os.getenv("SMTP_HOST")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USER = os.getenv("SMTP_USER")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
-SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER)
-SMTP_TO = os.getenv("SMTP_TO")
+# Tried only when HF_REPLY_MODEL fails for a reason other than quota
+# exhaustion (timeout, connection error, a provider-specific capacity
+# error) — HF's free third-party quota is one pool shared across every
+# provider, so this is NOT a second quota, just resilience against a
+# single provider having a bad moment.
+HF_REPLY_FALLBACK_MODEL = os.getenv("HF_REPLY_FALLBACK_MODEL", "meta-llama/Llama-3.1-8B-Instruct:novita")

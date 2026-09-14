@@ -65,16 +65,6 @@ def list_overdue_recurring_tasks(db: Session, now: datetime) -> list[Task]:
     return list(db.scalars(stmt))
 
 
-def list_unnotified_due_tasks(db: Session, now: datetime) -> list[Task]:
-    stmt = select(Task).where(
-        Task.status == TaskStatus.pending,
-        Task.due_at.is_not(None),
-        Task.due_at <= now,
-        Task.notified_at.is_(None),
-    )
-    return list(db.scalars(stmt))
-
-
 def get_tasks_by_ids(db: Session, ids: list[int]) -> list[Task]:
     if not ids:
         return []

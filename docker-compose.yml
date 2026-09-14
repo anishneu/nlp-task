@@ -10,13 +10,8 @@ services:
       HF_TOKEN: ${HF_TOKEN:-}
       HF_INTENT_MODEL: ${HF_INTENT_MODEL:-facebook/bart-large-mnli}
       HF_REPLY_MODEL: ${HF_REPLY_MODEL:-google/gemma-2-2b-it:featherless-ai}
+      HF_REPLY_FALLBACK_MODEL: ${HF_REPLY_FALLBACK_MODEL:-meta-llama/Llama-3.1-8B-Instruct:novita}
       APP_TIMEZONE: ${APP_TIMEZONE:-}
-      SMTP_HOST: ${SMTP_HOST:-}
-      SMTP_PORT: ${SMTP_PORT:-587}
-      SMTP_USER: ${SMTP_USER:-}
-      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
-      SMTP_FROM: ${SMTP_FROM:-}
-      SMTP_TO: ${SMTP_TO:-}
     volumes:
       - todo_bot_data:/app/data
     restart: unless-stopped

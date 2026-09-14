@@ -5,6 +5,32 @@ import { TaskDetailModal } from './TaskDetailModal'
 
 type StatusFilter = 'all' | 'pending' | 'completed'
 type View = 'list' | 'calendar'
+type SortBy = 'updated' | 'due' | 'created' | 'title'
+
+const SORT_OPTIONS: { value: SortBy; label: string }[] = [
+  { value: 'updated', label: 'Recently updated' },
+  { value: 'due', label: 'Due date' },
+  { value: 'created', label: 'Recently created' },
+  { value: 'title', label: 'Title (A-Z)' },
+]
+
+function compareBySort(a: Task, b: Task, sortBy: SortBy): number {
+  switch (sortBy) {
+    case 'updated':
+      return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+    case 'created':
+      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    case 'title':
+      return a.title.localeCompare(b.title)
+    case 'due':
+    default: {
+      if (!a.due_at && !b.due_at) return 0
+      if (!a.due_at) return 1
+      if (!b.due_at) return -1
+      return new Date(a.due_at).getTime() - new Date(b.due_at).getTime()
+    }
+  }
+}
 
 function formatDue(dueAt: string | null): string {
   if (!dueAt) return 'no due date'
@@ -45,6 +71,7 @@ export function TaskPanel({ tasks, onRefresh, onComplete, onDelete, onToggleStar
   const [view, setView] = useState<View>('list')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [starredOnly, setStarredOnly] = useState(false)
+  const [sortBy, setSortBy] = useState<SortBy>('updated')
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
   const [selectedTask, setSelectedTask] = useState<Task | null>(null)
 
@@ -53,8 +80,11 @@ export function TaskPanel({ tasks, onRefresh, onComplete, onDelete, onToggleStar
     if (statusFilter !== 'all') result = result.filter((t) => t.status === statusFilter)
     if (starredOnly) result = result.filter((t) => t.starred)
     if (selectedDate) result = result.filter((t) => t.due_at && toDateKey(new Date(t.due_at)) === selectedDate)
-    return [...result].sort((a, b) => Number(b.starred) - Number(a.starred))
-  }, [tasks, statusFilter, starredOnly, selectedDate])
+    return [...result].sort((a, b) => {
+      const starDiff = Number(b.starred) - Number(a.starred)
+      return starDiff !== 0 ? starDiff : compareBySort(a, b, sortBy)
+    })
+  }, [tasks, statusFilter, starredOnly, selectedDate, sortBy])
 
   return (
     <div className="flex h-full flex-col bg-panel">
@@ -92,9 +122,21 @@ export function TaskPanel({ tasks, onRefresh, onComplete, onDelete, onToggleStar
             {f}
           </button>
         ))}
+        <select
+          value={sortBy}
+          onChange={(e) => setSortBy(e.target.value as SortBy)}
+          aria-label="Sort tasks by"
+          className="ml-auto rounded-md border border-border bg-panel px-2 py-1 text-xs text-muted outline-none hover:bg-white/5"
+        >
+          {SORT_OPTIONS.map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              Sort: {opt.label}
+            </option>
+          ))}
+        </select>
         <button
           onClick={() => setStarredOnly((v) => !v)}
-          className={`ml-auto rounded-md px-2 py-1 text-xs ${
+          className={`rounded-md px-2 py-1 text-xs ${
             starredOnly ? 'bg-accent text-white' : 'border border-border text-muted hover:bg-white/5'
           }`}
         >

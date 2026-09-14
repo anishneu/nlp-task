@@ -12,6 +12,8 @@ COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY backend/app ./app
+COPY backend/alembic.ini .
+COPY backend/migrations ./migrations
 COPY --from=frontend-build /frontend-dist ./app/static
 
 EXPOSE 8000

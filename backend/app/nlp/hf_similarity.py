@@ -6,7 +6,13 @@ from app.config import HF_TOKEN
 
 _MODEL = "BAAI/bge-small-en-v1.5"
 _API_URL = f"https://router.huggingface.co/hf-inference/models/{_MODEL}"
-_MIN_SIMILARITY = 0.65
+# Re-calibrated after a real false match slipped through at 0.65: "dentist
+# appointment" vs "call mom" scored 0.659 — just over the old threshold,
+# despite being unrelated. A broader test set (5 pairs that should match,
+# 6 that shouldn't) showed a clean gap between the highest false-match
+# score (0.659) and the lowest true-match score (0.697); 0.68 sits in the
+# middle of that gap with margin on both sides.
+_MIN_SIMILARITY = 0.68
 _TIMEOUT_SECONDS = 8
 
 
