@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 
 from apscheduler.schedulers.background import BackgroundScheduler
+from dateutil.relativedelta import relativedelta
 
 from app import crud
 from app.database import SessionLocal
@@ -9,7 +10,9 @@ from app.notifications import send_due_email
 _RECURRENCE_STEP = {
     "daily": timedelta(days=1),
     "weekly": timedelta(weeks=1),
-    "monthly": timedelta(days=30),
+    # A calendar month, not a flat 30 days — a flat step drifts the due date
+    # across real months (e.g. Jan 31 + 30 days lands on Mar 2, not Feb 28).
+    "monthly": relativedelta(months=1),
 }
 
 _scheduler = BackgroundScheduler()
@@ -38,9 +41,22 @@ def run_reminder_tick() -> None:
             step = _RECURRENCE_STEP.get(task.recurrence)
             if step is None:
                 continue
-            next_due = task.due_at
-            while next_due <= now:
-                next_due += step
+            if isinstance(step, relativedelta):
+                # Jump directly from the original due date rather than
+                # repeatedly re-basing on the previous (possibly
+                # day-clamped) result — otherwise a short month like
+                # February permanently "sticks" the day-of-month down
+                # (Jan 31 -> Feb 28 -> Mar 28 instead of Mar 31).
+                anchor = task.due_at
+                periods = 1
+                next_due = anchor + step
+                while next_due <= now:
+                    periods += 1
+                    next_due = anchor + step * periods
+            else:
+                next_due = task.due_at
+                while next_due <= now:
+                    next_due += step
             task.due_at = next_due
             task.notified_at = None
         db.commit()
