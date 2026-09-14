@@ -14,7 +14,6 @@ export default defineConfig({
       '/reminders': BACKEND_URL,
       '/health': BACKEND_URL,
       '/conversations': BACKEND_URL,
-      '/auth': BACKEND_URL,
     },
   },
   build: {

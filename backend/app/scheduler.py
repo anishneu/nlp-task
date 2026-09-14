@@ -1,11 +1,11 @@
-from datetime import datetime, timedelta
+import re
+from datetime import timedelta
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from dateutil.relativedelta import relativedelta
 
-from app import crud
+from app import clock, crud
 from app.database import SessionLocal
-from app.notifications import send_due_email
 
 _RECURRENCE_STEP = {
     "daily": timedelta(days=1),
@@ -19,27 +19,39 @@ _RECURRENCE_STEP = {
     # handled separately in run_reminder_tick rather than through this map.
 }
 
+# "every N days/weeks/months" (e.g. "every_3_days") — a custom interval
+# beyond the fixed cadences above. Parsed at tick time rather than
+# pre-populating the map, since N is unbounded.
+_CUSTOM_INTERVAL_RE = re.compile(r"^every_(\d+)_(days|weeks|months)$")
+
+
+def _step_for_recurrence(recurrence: str):
+    step = _RECURRENCE_STEP.get(recurrence)
+    if step is not None:
+        return step
+    match = _CUSTOM_INTERVAL_RE.match(recurrence)
+    if not match:
+        return None
+    count, unit = int(match.group(1)), match.group(2)
+    if unit == "days":
+        return timedelta(days=count)
+    if unit == "weeks":
+        return timedelta(weeks=count)
+    return relativedelta(months=count)  # "months" — same calendar-correct jump as monthly/yearly
+
+
 _scheduler = BackgroundScheduler()
 
 
 def run_reminder_tick() -> None:
-    """Runs on every scheduler interval:
-
-    1. Emails (best-effort) any due task that hasn't been notified yet.
-    2. Fast-forwards recurring tasks whose due date has passed to their next
-       future occurrence, so a missed reminder (server was down, or nobody
-       had the app open) still lands on the right future date instead of
-       staying stuck in the past — and clears notified_at so the next
-       occurrence gets its own notification.
+    """Runs on every scheduler interval: fast-forwards recurring tasks whose
+    due date has passed to their next future occurrence, so a missed
+    reminder (server was down, or nobody had the app open) still lands on
+    the right future date instead of staying stuck in the past.
     """
     db = SessionLocal()
     try:
-        now = datetime.now()
-
-        for task in crud.list_unnotified_due_tasks(db, now):
-            send_due_email(task)
-            task.notified_at = now
-        db.commit()
+        now = clock.now()
 
         for task in crud.list_overdue_recurring_tasks(db, now):
             if task.recurrence == "weekday":
@@ -47,9 +59,8 @@ def run_reminder_tick() -> None:
                 while next_due <= now or next_due.weekday() >= 5:
                     next_due += timedelta(days=1)
                 task.due_at = next_due
-                task.notified_at = None
                 continue
-            step = _RECURRENCE_STEP.get(task.recurrence)
+            step = _step_for_recurrence(task.recurrence)
             if step is None:
                 continue
             if isinstance(step, relativedelta):
@@ -69,7 +80,6 @@ def run_reminder_tick() -> None:
                 while next_due <= now:
                     next_due += step
             task.due_at = next_due
-            task.notified_at = None
         db.commit()
     finally:
         db.close()

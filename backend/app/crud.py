@@ -3,6 +3,7 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app import clock
 from app.models import Conversation, Message, MessageRole, PendingClarification, Task, TaskStatus
 from app.nlp.hf_reply import generate_title
 from app.schemas import TaskCreate, TaskUpdate
@@ -60,16 +61,6 @@ def list_overdue_recurring_tasks(db: Session, now: datetime) -> list[Task]:
         Task.recurrence.is_not(None),
         Task.due_at.is_not(None),
         Task.due_at <= now,
-    )
-    return list(db.scalars(stmt))
-
-
-def list_unnotified_due_tasks(db: Session, now: datetime) -> list[Task]:
-    stmt = select(Task).where(
-        Task.status == TaskStatus.pending,
-        Task.due_at.is_not(None),
-        Task.due_at <= now,
-        Task.notified_at.is_(None),
     )
     return list(db.scalars(stmt))
 
@@ -140,7 +131,7 @@ def add_message(
     db.add(message)
     if conversation.title is None and role == MessageRole.user:
         conversation.title = generate_title(content) or content[:60]
-    conversation.updated_at = datetime.now()
+    conversation.updated_at = clock.now()
     db.commit()
     db.refresh(message)
     return message

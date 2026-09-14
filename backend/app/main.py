@@ -4,11 +4,11 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.database import ensure_schema
+from app.database import run_migrations
 from app.routers import chat, conversations, reminders, tasks
 from app.scheduler import start_scheduler, stop_scheduler
 
-ensure_schema()
+run_migrations()
 
 STATIC_DIR = Path(__file__).parent / "static"
 

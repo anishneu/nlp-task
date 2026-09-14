@@ -1,11 +1,14 @@
+import calendar
 import re
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time as dt_time, timedelta
 
 import dateparser
 
+from app import clock
 from app.models import TaskStatus
 from app.nlp.hf_intent import classify_intent_hf
+from app.nlp.hf_segment import segment_events_hf
 from app.nlp.intents import Intent
 
 _DAY = r"(?:mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:rs|rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)"
@@ -16,6 +19,8 @@ _NEXT_THIS = rf"(?:next|this)\s+(?:week|month|year|{_DAY})"
 _IN_OFFSET = rf"in\s+{_NUM_WORD}\s+(?:min(?:ute)?s?|hrs?|hours?|days?|weeks?)"
 _RECUR_DAY = rf"every\s+{_DAY}"
 _RECUR_UNIT = r"every\s+(?:weekday|day|week|month|year)"
+_RECUR_INTERVAL = r"every\s+\d+\s+(?:days?|weeks?|months?)"
+_ORDINAL_DAY = r"(?:on\s+)?the\s+(?:[12]?[0-9]|3[01])(?:st|nd|rd|th)"
 _URL_RE = re.compile(
     r"https?://\S+|(?:meet\.google\.com|zoom\.us|teams\.microsoft\.com)\S*", re.IGNORECASE
 )
@@ -24,7 +29,7 @@ _DATE_PHRASE_RE = re.compile(
     # "friday at 5pm" / "friday 5pm" (the "at" is optional so a time right
     # after a date word — the far more common way people actually phrase
     # it — isn't left behind for dateparser to fail to a bare weekday).
-    rf"\b(?:{_RECUR_DAY}|{_RECUR_UNIT}|{_REL}|{_NEXT_THIS}|{_DAY}|{_IN_OFFSET})\b(?:\s+(?:at\s+)?(?:{_TIME})\b)?"
+    rf"\b(?:{_RECUR_DAY}|{_RECUR_INTERVAL}|{_RECUR_UNIT}|{_REL}|{_NEXT_THIS}|{_DAY}|{_IN_OFFSET}|{_ORDINAL_DAY})\b(?:\s+(?:at\s+)?(?:{_TIME})\b)?"
     # "at 5pm friday" / "5pm friday" — time-first phrasing, with an
     # optional trailing date word so it also matches a bare time.
     rf"|\b(?:at\s+)?(?:{_TIME})\b(?:\s+(?:{_REL}|{_NEXT_THIS}|{_DAY}))?",
@@ -35,6 +40,8 @@ _TIME_RE = re.compile(rf"\b(?:{_TIME})\b", re.IGNORECASE)
 _RECUR_DAY_RE = re.compile(rf"^every\s+{_DAY}", re.IGNORECASE)
 _NEXT_THIS_DAY_RE = re.compile(rf"^(?:next|this)\s+({_DAY})", re.IGNORECASE)
 _RECUR_UNIT_RE = re.compile(r"^every\s+(weekday|day|week|month|year)\b", re.IGNORECASE)
+_RECUR_INTERVAL_RE = re.compile(r"^every\s+(\d+)\s+(days?|weeks?|months?)\b", re.IGNORECASE)
+_ORDINAL_DAY_RE = re.compile(r"^(?:on\s+)?the\s+([12]?[0-9]|3[01])(?:st|nd|rd|th)\b", re.IGNORECASE)
 _RECURRENCE_LABELS = {
     "weekday": "weekday",
     "day": "daily",
@@ -57,7 +64,7 @@ _CREATE_TRIGGERS = [
     r"^schedule\s+",
 ]
 _CREATE_TRIGGER_ANYWHERE_RE = re.compile(
-    r"\bremind me\s+(?:that|to)?\s*|\breminder\s+(?:that|to)?\s*", re.IGNORECASE
+    r"\bremind me\b(?:\s+(?:that|to|of))?\s*|\breminder\b(?:\s+(?:that|to|of))?\s*", re.IGNORECASE
 )
 _CREATE_INTENT_RE = re.compile(
     r"\bremind\b|\breminder\b|^add (?:a )?task\b|^create (?:a )?task\b|^i need to\b|^schedule\b|^set a reminder\b",
@@ -76,16 +83,26 @@ _COMPLETE_INTENT_RE = re.compile(
     re.IGNORECASE,
 )
 _DELETE_INTENT_RE = re.compile(r"^(?:delete|remove|cancel)\b", re.IGNORECASE)
+# "reschedule"/"postpone"/"push back" are unambiguous verbs in this domain
+# regardless of position ("can u reschedule..."); "update"/"edit" are more
+# generic English verbs, so they're anchored at the start to avoid matching
+# incidentally inside some other request.
+_UPDATE_INTENT_RE = re.compile(
+    r"\b(?:reschedule|postpone|push back)\b|^(?:update|edit)\b", re.IGNORECASE
+)
+_TIME_GREETING = r"good (?:morning|afternoon|evening)"
 _GREETING_RE = re.compile(
-    r"^(?:hi|hello|hey|yo|sup|howdy|good morning|good afternoon|good evening)"
-    r"(?:\s+\w+)?[\s!.,]*$",
+    rf"^(?:hi|hello|hey|yo|sup|howdy|{_TIME_GREETING})"
+    rf"(?:[\s,]+\w+)?"  # optional name, e.g. "Hi Serene"
+    rf"(?:[\s,]+{_TIME_GREETING})?"  # optional trailing "...  good morning"
+    rf"[\s!.,]*$",
     re.IGNORECASE,
 )
 _NAME_QUERY_RE = re.compile(
     r"^what(?:'s| is) your name\??$|^what should i call you\??$", re.IGNORECASE
 )
 _SET_NAME_RE = re.compile(
-    r"^(?:can|could) i call (?:you|u)\s+(.+?)[\?\.!]*$"
+    r"^(?:can|could|may) i call (?:you|u)\s+(.+?)[\?\.!]*$"
     r"|^(?:i'?ll|i will|i want to) call (?:you|u)\s+(.+?)[\?\.!]*$"
     r"|^call (?:you|u)\s+(.+?)[\?\.!]*$"
     r"|^(?:your name is|you'?re now called|you are now called)\s+(.+?)[\?\.!]*$",
@@ -101,12 +118,64 @@ _LEADING_CONNECTOR_RE = re.compile(
 _LEADING_ARTICLE_RE = re.compile(r"^(?:my|the)\s+", re.IGNORECASE)
 _TRAILING_NOUN_RE = re.compile(r"\s+(?:task|reminder)$", re.IGNORECASE)
 
+_CLAUSE_SPLIT_RE = re.compile(
+    r"\bafter which\b|\band then\b|\bso that\b|,?\s*\bthen\b"
+    r"|\band (?:i(?:'ve| have)?\s+)?also\b"
+    # Bare "and", and a plain sentence boundary, are deliberately
+    # last/least specific — either is just as likely to land in the
+    # middle of unrelated phrasing ("buy milk and eggs", "It's due
+    # Friday. Thanks!") as between two real events. Splitting on them is
+    # only safe because of how the caller uses the result: a segment
+    # that doesn't resolve to its own title + explicit time is dropped
+    # rather than voiding the whole split (see parse()), so a stray
+    # non-event segment just disappears instead of forcing a fallback.
+    r"|\band\b|\.\s+(?=[A-Za-z])",
+    re.IGNORECASE,
+)
+_CLAUSE_FILLER_RE = re.compile(
+    r"^(?:and|so|that)\s+"
+    r"|^i(?:'ve| have| had|'ll| will)?\s+(?:got to\s+|got\s+|need to\s+|could\s+|can\s+)?"
+    r"|^(?:could|can|got)\s+"
+    r"|^an?\s+",
+    re.IGNORECASE,
+)
+
+
+def _strip_clause_filler(text: str) -> str:
+    text = text.strip(" ,.")
+    while True:
+        stripped = _CLAUSE_FILLER_RE.sub("", text, count=1).strip(" ,.")
+        if stripped == text:
+            break
+        text = stripped
+    return text
+
+
+def _split_into_clauses(text: str) -> list[str]:
+    """Splits a compound message like "X at 2pm, then Y at 3pm" into its
+    separate event clauses on common sequencing conjunctions.
+
+    Deliberately conservative — no bare commas or "and" (too likely to
+    misfire on innocuous phrasing like "buy milk and eggs") — so most
+    single-task messages come back as a single untouched clause.
+    """
+    parts = _CLAUSE_SPLIT_RE.split(text)
+    return [_strip_clause_filler(p) for p in parts if p and p.strip(" ,.")]
+
 
 @dataclass
 class DatePhrase:
     due_at: datetime | None
     has_explicit_time: bool
     recurrence: str | None = None
+
+
+@dataclass
+class TaskSpec:
+    title: str
+    due_at: datetime | None
+    recurrence: str | None
+    link: str | None
 
 
 @dataclass
@@ -122,33 +191,91 @@ class ParsedMessage:
     due_on: date | None = None
     proposed_name: str | None = None
     link: str | None = None
+    # Populated instead of the single title/due_at/... fields above when the
+    # message describes several distinct events, each with its own clear
+    # time (e.g. "interview at 2pm, then a shower at 3pm") — see
+    # _split_into_clauses. None/empty means "just one task, use the fields
+    # above as usual".
+    task_specs: list[TaskSpec] | None = None
+
+
+def _resolve_ordinal_day(day: int, now: datetime) -> date | None:
+    """Finds the next date (today or later) whose day-of-month is `day`,
+    skipping a month at a time when `day` doesn't exist in it (e.g. the
+    31st in April) or has already passed this month.
+
+    Computed directly rather than handed to dateparser — dateparser treats
+    a bare low ordinal like "the 1st"/"the 3rd" as a MONTH reference, not a
+    day-of-month one (confirmed live: "the 1st" resolved to next January
+    1st while keeping *today's* day-of-month, not "the 1st of next
+    month"), and no settings flag was found that fixes it.
+    """
+    if not 1 <= day <= 31:
+        return None
+    year, month = now.year, now.month
+    for _ in range(24):  # generous cap; every real case resolves well before this
+        days_in_month = calendar.monthrange(year, month)[1]
+        if day <= days_in_month:
+            candidate = date(year, month, day)
+            if candidate >= now.date():
+                return candidate
+        month += 1
+        if month > 12:
+            month = 1
+            year += 1
+    return None
 
 
 def _parse_date_match(match: re.Match) -> DatePhrase:
     phrase = match.group(0)
     recurrence = None
     remainder = phrase
+    relative_base = clock.now()
 
     unit_match = _RECUR_UNIT_RE.match(phrase)
     day_match = _RECUR_DAY_RE.match(phrase)
+    interval_match = _RECUR_INTERVAL_RE.match(phrase)
     next_this_day_match = _NEXT_THIS_DAY_RE.match(phrase)
+    ordinal_day_match = _ORDINAL_DAY_RE.match(phrase)
     if unit_match:
         recurrence = _RECURRENCE_LABELS[unit_match.group(1).lower()]
         remainder = phrase[unit_match.end():].strip()
     elif day_match:
         recurrence = "weekly"
         remainder = phrase[len("every "):].strip()
+    elif interval_match:
+        count = int(interval_match.group(1))
+        unit_word = interval_match.group(2).rstrip("s") + "s"  # normalize "day"/"days" -> "days"
+        recurrence = f"every_{count}_{unit_word}"
+        remainder = phrase[interval_match.end():].strip()
     elif next_this_day_match:
         # dateparser can't handle "next/this <weekday>" as a phrase (returns
         # None) even though the bare weekday works fine — strip the prefix.
         remainder = phrase[next_this_day_match.start(1):]
+    elif ordinal_day_match:
+        base_date = _resolve_ordinal_day(int(ordinal_day_match.group(1)), clock.now())
+        if base_date is None:
+            return DatePhrase(due_at=None, has_explicit_time=False)
+        remainder = phrase[ordinal_day_match.end():].strip()
+        relative_base = datetime.combine(base_date, dt_time.min)
+        if not remainder:
+            # No trailing time ("the 1st" alone) — the date is already
+            # fully resolved, so skip dateparser rather than pass it "".
+            return DatePhrase(due_at=relative_base, has_explicit_time=False)
 
     # dateparser also can't handle "tonight" on its own (returns None) even
     # though "today"/"tomorrow" work fine — treat it as "today" for date
     # resolution; the actual time comes from the TIME match elsewhere.
     remainder = re.sub(r"\btonight\b", "today", remainder, flags=re.IGNORECASE)
 
-    parsed = dateparser.parse(remainder, settings={"PREFER_DATES_FROM": "future"}) if remainder else None
+    parsed = (
+        dateparser.parse(
+            remainder,
+            settings={"PREFER_DATES_FROM": "future", "RELATIVE_BASE": relative_base},
+        )
+        if remainder
+        else None
+    )
     if parsed is None and recurrence is None:
         return DatePhrase(due_at=None, has_explicit_time=False)
     if recurrence == "weekday" and parsed is not None:
@@ -162,8 +289,35 @@ def _parse_date_match(match: re.Match) -> DatePhrase:
     return DatePhrase(due_at=parsed, has_explicit_time=is_precise, recurrence=recurrence)
 
 
+def _find_best_date_match(text: str) -> re.Match | None:
+    matches = list(_DATE_PHRASE_RE.finditer(text))
+    if not matches:
+        return None
+    # Prefer whichever match actually resolves with an explicit time or a
+    # recurrence over an earlier bare relative word that just happens to
+    # appear first in the sentence — e.g. "tasks to work on today, then an
+    # interview at 2pm" shouldn't lock onto "today" (no time of its own)
+    # when "2pm" later in the same sentence is the real due time.
+    for m in matches:
+        if _parse_date_match(m).has_explicit_time:
+            return m
+    for m in matches:
+        if _parse_date_match(m).recurrence is not None:
+            return m
+    return matches[0]
+
+
+def _count_explicit_time_phrases(text: str) -> int:
+    """How many distinct date phrases in `text` resolve with their own
+    explicit time — used as a cheap signal for "this message probably
+    describes multiple events" when deciding whether it's worth escalating
+    to LLM-based segmentation (see parse()).
+    """
+    return sum(1 for m in _DATE_PHRASE_RE.finditer(text) if _parse_date_match(m).has_explicit_time)
+
+
 def _extract_date_phrase(text: str) -> DatePhrase:
-    match = _DATE_PHRASE_RE.search(text)
+    match = _find_best_date_match(text)
     if not match:
         return DatePhrase(due_at=None, has_explicit_time=False)
     return _parse_date_match(match)
@@ -172,7 +326,13 @@ def _extract_date_phrase(text: str) -> DatePhrase:
 def _clean_title(text: str) -> str:
     text = re.sub(r"\s+", " ", text).strip()
     while True:
-        stripped = _TRAILING_CONNECTOR_RE.sub("", text).strip()
+        # Trailing punctuation has to go first each pass, not just at the
+        # very end — "...Erza to tomorrow 9pm?" leaves "...Erza to ?" once
+        # the date phrase is removed, and with "?" still there "to" isn't
+        # at the true end of the string, so the connector strip below never
+        # gets a chance to see it and match.
+        stripped = text.strip(" .!?")
+        stripped = _TRAILING_CONNECTOR_RE.sub("", stripped).strip()
         stripped = _LEADING_CONNECTOR_RE.sub("", stripped).strip()
         if stripped == text:
             break
@@ -181,7 +341,7 @@ def _clean_title(text: str) -> str:
 
 
 def _split_on_date_phrase(text: str) -> tuple[str, DatePhrase]:
-    match = _DATE_PHRASE_RE.search(text)
+    match = _find_best_date_match(text)
     if not match:
         return _clean_title(text), DatePhrase(due_at=None, has_explicit_time=False)
     date_phrase = _parse_date_match(match)
@@ -207,6 +367,8 @@ def _classify_intent(text: str) -> Intent:
     # requests), where it's actually needed to disambiguate intent.
     if _DELETE_INTENT_RE.search(text):
         return Intent.delete_task
+    if _UPDATE_INTENT_RE.search(text):
+        return Intent.update_task
     if _COMPLETE_INTENT_RE.search(text):
         return Intent.complete_task
     if _LIST_INTENT_RE.search(text):
@@ -226,16 +388,79 @@ def _strip_create_trigger(text: str) -> str:
             return text[match.end():]
     match = _CREATE_TRIGGER_ANYWHERE_RE.search(text)
     if match:
-        return text[match.end():]
+        before = text[: match.start()].strip(" ,.")
+        after = text[match.end():].strip(" ,.")
+        # The trigger phrase can trail AFTER the real content instead of
+        # leading it ("...birthday party at 5:30pm. Can u put a reminder
+        # for me") — taking "after" unconditionally produced junk titles
+        # like "me" in that case. Use whichever side actually has
+        # substance; a short trailing "for me"/"please" is exactly the
+        # filler this is meant to strip, not the task itself.
+        if len(after.split()) < 3 and len(before.split()) > len(after.split()):
+            return before
+        return after
     return text
 
 
-def parse(text: str) -> ParsedMessage:
+def _build_task_specs(clauses: list[str]) -> list[TaskSpec]:
+    """Turns candidate event snippets (from regex clause-splitting or LLM
+    segmentation) into TaskSpecs, keeping only the ones that resolve their
+    own clear title + explicit time.
+
+    A snippet that doesn't is dropped rather than voiding the whole batch —
+    it's usually connective framing ("I've got a few things to do today")
+    or trailing filler ("could u please"), not a real event that's just
+    missing a time. Callers decide whether enough survived (2+) to commit
+    to a multi-task result; a lone survivor would need per-clause
+    clarification, which the single-slot pending-clarification flow can't
+    express, so that falls back to treating the whole message as one task.
+    """
+    specs = []
+    for clause in clauses:
+        url_match = _URL_RE.search(clause)
+        link = url_match.group(0).rstrip(".,;:!?") if url_match else None
+        if url_match:
+            clause = clause[: url_match.start()] + clause[url_match.end():]
+        title, date_phrase = _split_on_date_phrase(clause)
+        if not title or date_phrase.due_at is None or not date_phrase.has_explicit_time:
+            continue
+        specs.append(
+            TaskSpec(title=title, due_at=date_phrase.due_at, recurrence=date_phrase.recurrence, link=link)
+        )
+    return specs
+
+
+def parse(text: str, bot_name: str | None = None) -> ParsedMessage:
     text = text.strip()
+    if bot_name:
+        # "Serene, I have an interview..." / "Serene, may I call u Celine?" —
+        # a leading vocative address breaks every intent regex anchored at
+        # the start of the string (^), which is most of them. Strip it
+        # before classifying anything else.
+        text = re.sub(rf"^{re.escape(bot_name)}\s*[,!]\s*", "", text, count=1, flags=re.IGNORECASE)
     intent = _classify_intent(text)
 
     if intent == Intent.create_task:
         remainder = _strip_create_trigger(text)
+
+        specs = _build_task_specs(_split_into_clauses(remainder))
+        if len(specs) <= 1 and _count_explicit_time_phrases(remainder) >= 2:
+            # The regex clause-splitter only recognizes a fixed set of
+            # conjunctions/sentence boundaries — it can miss genuinely novel
+            # phrasing. But 2+ of its own explicit-time phrases in one
+            # message is a strong, cheap-to-check signal that there really
+            # are multiple events in here, so it's worth the one extra HF
+            # call to ask a small LLM to segment the text (never to compute
+            # a date itself — see hf_segment.py) and re-run the exact same
+            # verified title/time extraction on what it returns.
+            llm_segments = segment_events_hf(remainder)
+            if llm_segments and len(llm_segments) > 1:
+                llm_specs = _build_task_specs(llm_segments)
+                if len(llm_specs) > 1:
+                    specs = llm_specs
+        if len(specs) > 1:
+            return ParsedMessage(intent=intent, raw_text=text, task_specs=specs)
+
         url_match = _URL_RE.search(remainder)
         link = url_match.group(0).rstrip(".,;:!?") if url_match else None
         if url_match:
@@ -290,6 +515,27 @@ def parse(text: str) -> ParsedMessage:
         remainder = re.sub(r"^(?:delete|remove|cancel)\s+", "", text, flags=re.IGNORECASE)
         return ParsedMessage(
             intent=intent, raw_text=text, task_query=_clean_task_reference(remainder) or None
+        )
+
+    if intent == Intent.update_task:
+        # "can u reschedule my dinner date with Ms. Erza to tomorrow 9pm?" —
+        # the trigger word can be anywhere in the message (not just at the
+        # start), so take everything after it rather than assuming an
+        # anchored prefix. The same date-phrase extraction used for
+        # create_task pulls out the new time; whatever's left (after the
+        # same title/reference cleanup used for complete_task/delete_task)
+        # is which existing task to look up.
+        trigger_match = _UPDATE_INTENT_RE.search(text)
+        remainder = text[trigger_match.end():].strip() if trigger_match else text
+        query_text, date_phrase = _split_on_date_phrase(remainder)
+        ambiguous = date_phrase.due_at is not None and not date_phrase.has_explicit_time
+        return ParsedMessage(
+            intent=intent,
+            raw_text=text,
+            task_query=_clean_task_reference(query_text) or None,
+            due_at=date_phrase.due_at,
+            date_is_ambiguous=ambiguous,
+            recurrence=date_phrase.recurrence,
         )
 
     if intent == Intent.greeting:
