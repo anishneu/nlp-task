@@ -25,9 +25,18 @@ def _format_due(due_at) -> str:
     return due_at.strftime("%a, %b %d at %I:%M %p") if due_at else ""
 
 
+_RECURRENCE_PHRASING = {
+    "daily": "daily",
+    "weekly": "weekly",
+    "monthly": "monthly",
+    "yearly": "yearly",
+    "weekday": "on weekdays",
+}
+
+
 def _format_confirmation(title: str, due_at, recurrence: str | None, link: str | None) -> str:
     when = f" for {_format_due(due_at)}" if due_at else ""
-    repeats = f", repeating {recurrence}" if recurrence else ""
+    repeats = f", repeating {_RECURRENCE_PHRASING.get(recurrence, recurrence)}" if recurrence else ""
     link_note = f" Join here: {link}" if link else ""
     return f'Got it — I\'ve scheduled "{title}"{when}{repeats}.{link_note}'
 
