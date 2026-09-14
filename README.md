@@ -1,10 +1,10 @@
-# Custom To-Do Bot
+# Customizable NLP-Based Task & Reminder Chat Assistant
 
 Conversational task & reminder assistant — natural-language scheduling backed by a structured task API.
 
 **Status: chat, task management, conversation history, scheduling/notifications, and a React frontend are all implemented and working.**
 
-Custom To-Do Bot lets a user manage tasks the way they'd talk to a personal assistant — "remind me to submit my resume tomorrow at 9 AM" — instead of filling out a form. The design separates language understanding from execution: a parser turns a sentence into a structured intent + entities, a dialogue layer fills in anything missing (asking follow-up questions across turns), a plain REST API owns the actual task records, and a background scheduler keeps recurring reminders — and their notifications — on track. Every conversation is a persisted, resumable thread (ChatGPT-style history), and tasks can be starred, filtered, and viewed on a calendar.
+It lets a user manage tasks the way they'd talk to a personal assistant — "remind me to submit my resume tomorrow at 9 AM" — instead of filling out a form. The design separates language understanding from execution: a parser turns a sentence into a structured intent + entities, a dialogue layer fills in anything missing (asking follow-up questions across turns), a plain REST API owns the actual task records, and a background scheduler keeps recurring reminders — and their notifications — on track. Every conversation is a persisted, resumable thread (ChatGPT-style history), and tasks can be starred, filtered, and viewed on a calendar.
 
 Stack: FastAPI (Python) · SQLAlchemy · SQLite (Postgres/MySQL-ready) · `dateparser` · APScheduler · Hugging Face Inference API · React + TypeScript + Tailwind CSS (Vite) · Docker Compose
 
@@ -124,10 +124,12 @@ npm install
 **Local development** (fast-refresh frontend, proxied to the API):
 
 ```bash
-# terminal 1
-cd backend && uvicorn app.main:app --reload --port 8000
+# terminal 1 — from the repo root
+cd backend
+venv/Scripts/activate    # venv\Scripts\activate on Windows cmd, source venv/bin/activate on macOS/Linux
+uvicorn app.main:app --reload --port 8000
 
-# terminal 2
+# terminal 2 — from the repo root
 cd frontend && npm run dev
 ```
 
@@ -137,7 +139,9 @@ Open `http://localhost:3000/` — Vite proxies `/tasks`, `/chat`, `/reminders`, 
 
 ```bash
 cd frontend && npm run build   # outputs into backend/app/static
-cd ../backend && uvicorn app.main:app --port 8000
+cd ../backend
+venv/Scripts/activate    # venv\Scripts\activate on Windows cmd, source venv/bin/activate on macOS/Linux
+uvicorn app.main:app --port 8000
 ```
 
 Open `http://127.0.0.1:8000/` — FastAPI now serves the built frontend directly, no separate frontend server. A `todo_bot.db` SQLite file is created automatically on first run; point `DATABASE_URL` at a MySQL/Postgres instance to use that instead. To enable ML-backed intent classification, set `HF_TOKEN` in `backend/.env` to a free token from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) — without it, the app runs entirely on the rule-based parser with no loss of functionality. Every due date and timestamp is computed using the server process's own system timezone by default; if that machine isn't in your own timezone (a cloud host, a container, a dev sandbox), set `APP_TIMEZONE` in `backend/.env` to an IANA name like `America/New_York` so "today"/"tomorrow"/bare times resolve against where you actually are.
