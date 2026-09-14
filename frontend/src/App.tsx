@@ -113,6 +113,11 @@ export default function App() {
     refreshTasks()
   }
 
+  async function handleUpdateDueDate(id: number, dueAt: string | null) {
+    await api.setDueDate(id, dueAt)
+    refreshTasks()
+  }
+
   if (!started) {
     return <LandingPage onGetStarted={() => setStarted(true)} />
   }
@@ -142,6 +147,7 @@ export default function App() {
           onComplete={handleComplete}
           onDelete={handleDelete}
           onToggleStar={handleToggleStar}
+          onUpdateDueDate={handleUpdateDueDate}
         />
       </div>
     </div>

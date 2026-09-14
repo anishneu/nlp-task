@@ -6,7 +6,7 @@ Conversational task & reminder assistant — natural-language scheduling backed 
 
 Custom To-Do Bot lets a user manage tasks the way they'd talk to a personal assistant — "remind me to submit my resume tomorrow at 9 AM" — instead of filling out a form. The design separates language understanding from execution: a parser turns a sentence into a structured intent + entities, a dialogue layer fills in anything missing (asking follow-up questions across turns), a plain REST API owns the actual task records, and a background scheduler keeps recurring reminders — and their notifications — on track. Every conversation is a persisted, resumable thread (ChatGPT-style history), and tasks can be starred, filtered, and viewed on a calendar.
 
-Stack: FastAPI (Python) · SQLAlchemy · SQLite (Postgres/MySQL-ready) · `dateparser` · APScheduler · Hugging Face Inference API (optional) · React + TypeScript + Tailwind CSS (Vite) · Docker Compose
+Stack: FastAPI (Python) · SQLAlchemy · SQLite (Postgres/MySQL-ready) · `dateparser` · APScheduler · Hugging Face Inference API · React + TypeScript + Tailwind CSS (Vite) · Docker Compose
 
 Author: Anish Kuila
 
@@ -26,7 +26,7 @@ Author: Anish Kuila
 Pipeline (chat-first assistant):
 
 ```
-User ──▶ [React chat UI] ──▶ [Parser: HF zero-shot intent (optional) → regex fallback + dateparser entities] ──▶ [Chat service] ──▶ [Task CRUD] ──▶ [SQLite/Postgres]
+User ──▶ [React chat UI] ──▶ [Parser: HF zero-shot intent → regex fallback + dateparser entities] ──▶ [Chat service] ──▶ [Task CRUD] ──▶ [SQLite/Postgres]
        (frontend/, served       (this repo, app/nlp/)                                              (dialogue state,   (this repo)
         by FastAPI at /)                                                                             app/services/)
                                                                                                               │
@@ -50,7 +50,7 @@ User ──▶ [React chat UI] ──▶ [Parser: HF zero-shot intent (optional)
                                                                                     GET /reminders/due ──▶ in-app toast
 ```
 
-A message like `"Remind me to call Mom on Friday at 6 PM"` is classified into an intent (`create_task`), has its title and due date extracted, and is executed straight against the task store. Intent classification tries the Hugging Face Inference API first when `HF_TOKEN` is configured — zero-shot classification against six candidate labels: the four task actions plus "a greeting or friendly small talk" and "something unrelated to managing tasks or reminders", so casual chat (`"how are you doing?"`, `"thanks!"`) has a legitimate bucket instead of being force-fit into a task action — and transparently falls back to the regex classifier otherwise, so the bot works identically with zero setup, and gets a real ML model in the loop the moment you add a free token.
+A message like `"Remind me to call Mom on Friday at 6 PM"` is classified into an intent (`create_task`), has its title and due date extracted, and is executed straight against the task store. Intent classification tries the Hugging Face Inference API first when `HF_TOKEN` is configured — zero-shot classification against seven candidate labels: the five task actions plus "a greeting or friendly small talk" and "something unrelated to managing tasks or reminders", so casual chat (`"how are you doing?"`, `"thanks!"`) has a legitimate bucket instead of being force-fit into a task action — and transparently falls back to the regex classifier otherwise, so the bot works identically with zero setup, and gets a real ML model in the loop the moment you add a free token.
 
 If a date is mentioned without a time (`"remind me to study tomorrow"`) — or a recurrence is given with no time at all (`"remind me to drink water every day"`) — the parser flags it as ambiguous and the bot asks a follow-up question instead of guessing. That follow-up is genuinely multi-turn: the frontend sends a `conversation_id` with every message, the backend remembers the pending question against it, and your very next message (`"10am"`, or `"the bank one"` when disambiguating between two similarly-named tasks) is interpreted as the answer rather than a fresh command. `"remind me to exercise every Monday at 7 AM"` sets up a recurring task directly; a background APScheduler job fast-forwards any missed recurring task to its next future occurrence, so it always lands on the right future date instead of staying stuck in the past. The bundled UI polls `GET /reminders/due` and pops an in-app toast notification for anything currently due.
 
@@ -64,7 +64,7 @@ Picking *which* task a `complete_task`/`delete_task`/`update_task` message refer
 
 Every reply also passes through a small LLM (`google/gemma-2-2b-it`) that rephrases the deterministic template into something more conversational — the underlying facts (task titles, dates, links) are computed exactly as before and the LLM's only job is wording, so a "Got it — I've scheduled X for Y" can come back as "Sounds good, I'll remind you about X on Y!" without risking the actual data. Falls back to the plain template instantly if `HF_TOKEN` isn't set or the call fails for any reason (see [Limitations](#limitations) for a real caveat about this one's free-tier quota).
 
-Every conversation is a real, persisted thread: a left sidebar lists past conversations (auto-titled from their first message), **New Chat** starts a fresh one, and clicking any past conversation reloads its full message history from the database — nothing lives only in browser memory. Pasting a meeting link into a message (`"remind me to join the standup at meet.google.com/abc-defg-hij tomorrow at 10am"` — also recognizes `zoom.us/...`, `teams.microsoft.com/...`, or any `https://` URL) attaches it to the task and shows it as a clickable "🎥 Join Meet" button on the task card and in the chat reply. Tasks can be starred as important, filtered by status or starred-only, and viewed either as a list or on a full month calendar grid (click a day to filter the list to it) — each task also shows a relative "created X ago" timestamp. Clicking a task's title opens a detail popup with its full record: status, exact due date, recurrence, description, link, and both created/last-updated timestamps, with Star/Mark done/Delete actions right there. Chat messages carry a full date + time (not just a bare clock time), and addressing the bot by name first ("Serene, remind me to...") no longer breaks parsing — the vocative is stripped before anything else runs.
+Every conversation is a real, persisted thread: a left sidebar lists past conversations (auto-titled from their first message), **New Chat** starts a fresh one, and clicking any past conversation reloads its full message history from the database — nothing lives only in browser memory. Pasting a meeting link into a message (`"remind me to join the standup at meet.google.com/abc-defg-hij tomorrow at 10am"` — also recognizes `zoom.us/...`, `teams.microsoft.com/...`, or any `https://` URL) attaches it to the task and shows it as a clickable "🎥 Join Meet" button on the task card and in the chat reply. Tasks can be starred as important, filtered by status or starred-only, and viewed either as a list or on a full month calendar grid (click a day to filter the list to it) — each task also shows a relative "created X ago" timestamp. Clicking a task's title opens a detail popup with its full record: status, exact due date, recurrence, description, link, and both created/last-updated timestamps, with Star/Mark done/Delete actions right there — and an Edit button next to the due date lets you set or change it directly with a native date/time picker, no chat message required. Chat messages carry a full date + time (not just a bare clock time), and addressing the bot by name first ("Serene, remind me to...") no longer breaks parsing — the vocative is stripped before anything else runs.
 
 ## Architecture
 
@@ -72,7 +72,7 @@ Every conversation is a real, persisted thread: a left sidebar lists past conver
 |---|---|---|
 | Backend | FastAPI, Pydantic schemas, SQLAlchemy ORM | Implemented |
 | Database | SQLite (dev), swappable to MySQL/Postgres via `DATABASE_URL` | Implemented |
-| NLP — intent classification | Hugging Face Inference API zero-shot (`facebook/bart-large-mnli`), 6 labels (4 task actions + greeting + off-topic), opt-in via `HF_TOKEN`, with a regex classifier as automatic fallback | Implemented |
+| NLP — intent classification | Hugging Face Inference API zero-shot (`facebook/bart-large-mnli`), 7 labels (5 task actions + greeting + off-topic), opt-in via `HF_TOKEN`, with a regex classifier as automatic fallback | Implemented |
 | NLP — task matching | Hugging Face sentence embeddings (`BAAI/bge-small-en-v1.5`, cosine similarity) to resolve which task a vague/indirect phrase refers to, opt-in via `HF_TOKEN`, with keyword-overlap matching as automatic fallback | Implemented |
 | Conversational tone | Hugging Face chat-completion (`google/gemma-2-2b-it`, configurable via `HF_REPLY_MODEL`) rephrases each deterministic reply to sound natural, opt-in via `HF_TOKEN`, with the plain template as automatic fallback | Implemented |
 | NLP — entities (dates/times/recurrence/links) | Regex + `dateparser` | Implemented (rule-based) |
@@ -170,7 +170,7 @@ Autogenerate is good at columns and tables; it doesn't reliably catch things lik
 ```
 nlp-task/
 ├── docker-compose.yml           Backend service (multi-stage build) + persistent SQLite volume
-├── .env.example                 Vars docker-compose reads (HF_TOKEN, APP_TIMEZONE)
+├── .env.example                 Vars docker-compose reads (HF_TOKEN + model overrides, APP_TIMEZONE)
 ├── backend/
 │   ├── Dockerfile                Multi-stage: builds frontend/, then the Python image
 │   ├── .env.example               Same vars, for local (non-Docker) runs

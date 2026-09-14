@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import type { Task } from '../types'
 
 function formatFull(iso: string | null): string {
@@ -10,6 +11,13 @@ function formatFull(iso: string | null): string {
     hour: 'numeric',
     minute: '2-digit',
   })
+}
+
+function toDateTimeLocalValue(iso: string | null): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
 const RECURRENCE_LABELS: Record<string, string> = {
@@ -40,9 +48,38 @@ interface Props {
   onComplete: (id: number) => void
   onDelete: (id: number) => void
   onToggleStar: (id: number, starred: boolean) => void
+  onUpdateDueDate: (id: number, dueAt: string | null) => void
 }
 
-export function TaskDetailModal({ task, onClose, onComplete, onDelete, onToggleStar }: Props) {
+export function TaskDetailModal({
+  task,
+  onClose,
+  onComplete,
+  onDelete,
+  onToggleStar,
+  onUpdateDueDate,
+}: Props) {
+  const [editingDate, setEditingDate] = useState(false)
+  const [dateValue, setDateValue] = useState(() => toDateTimeLocalValue(task.due_at))
+
+  function startEditingDate() {
+    setDateValue(toDateTimeLocalValue(task.due_at))
+    setEditingDate(true)
+  }
+
+  function saveDate() {
+    // Sent as-is (no UTC conversion) — the whole app treats due dates as
+    // naive wall-clock time in one timezone (see backend/app/clock.py), so
+    // .toISOString() here would shift it by the browser's UTC offset.
+    onUpdateDueDate(task.id, dateValue ? `${dateValue}:00` : null)
+    setEditingDate(false)
+  }
+
+  function clearDate() {
+    onUpdateDueDate(task.id, null)
+    setEditingDate(false)
+  }
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
@@ -72,7 +109,51 @@ export function TaskDetailModal({ task, onClose, onComplete, onDelete, onToggleS
               </span>
             }
           />
-          <DetailRow label="Due" value={formatFull(task.due_at)} />
+          <DetailRow
+            label="Due"
+            value={
+              editingDate ? (
+                <div className="flex items-center justify-end gap-1.5">
+                  <input
+                    type="datetime-local"
+                    value={dateValue}
+                    onChange={(e) => setDateValue(e.target.value)}
+                    className="rounded-md border border-border bg-panel px-1.5 py-1 text-xs outline-none"
+                  />
+                  <button
+                    onClick={saveDate}
+                    className="rounded-md border border-border px-2 py-1 text-xs text-accent hover:bg-white/5"
+                  >
+                    Save
+                  </button>
+                  <button
+                    onClick={() => setEditingDate(false)}
+                    className="rounded-md border border-border px-2 py-1 text-xs text-muted hover:bg-white/5"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center justify-end gap-1.5">
+                  <span>{formatFull(task.due_at)}</span>
+                  <button
+                    onClick={startEditingDate}
+                    className="rounded-md border border-border px-1.5 py-0.5 text-[10px] text-muted hover:bg-white/5"
+                  >
+                    Edit
+                  </button>
+                  {task.due_at && (
+                    <button
+                      onClick={clearDate}
+                      className="rounded-md border border-border px-1.5 py-0.5 text-[10px] text-muted hover:bg-white/5"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+              )
+            }
+          />
           {task.recurrence && (
             <DetailRow label="Repeats" value={RECURRENCE_LABELS[task.recurrence] ?? task.recurrence} />
           )}

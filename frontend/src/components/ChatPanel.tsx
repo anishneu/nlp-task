@@ -99,7 +99,7 @@ export function ChatPanel({ botName, onBotNameChange, messages, onSend }: Props)
             Rename
           </button>
         </span>
-        <span className="text-xs text-muted">HF intent (optional) + rule-based · /chat</span>
+        <span className="text-xs text-muted">HF intent + rule-based · /chat</span>
       </header>
 
       <div className="flex flex-wrap gap-1.5 px-3.5 pb-2.5 pt-3.5">

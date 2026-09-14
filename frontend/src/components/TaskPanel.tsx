@@ -65,9 +65,10 @@ interface Props {
   onComplete: (id: number) => void
   onDelete: (id: number) => void
   onToggleStar: (id: number, starred: boolean) => void
+  onUpdateDueDate: (id: number, dueAt: string | null) => void
 }
 
-export function TaskPanel({ tasks, onRefresh, onComplete, onDelete, onToggleStar }: Props) {
+export function TaskPanel({ tasks, onRefresh, onComplete, onDelete, onToggleStar, onUpdateDueDate }: Props) {
   const [view, setView] = useState<View>('list')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [starredOnly, setStarredOnly] = useState(false)
@@ -228,6 +229,7 @@ export function TaskPanel({ tasks, onRefresh, onComplete, onDelete, onToggleStar
           onComplete={onComplete}
           onDelete={onDelete}
           onToggleStar={onToggleStar}
+          onUpdateDueDate={onUpdateDueDate}
         />
       )}
     </div>

@@ -24,6 +24,13 @@ export const api = {
       body: JSON.stringify({ starred }),
     }).then((r) => json(r)),
 
+  setDueDate: (id: number, dueAt: string | null): Promise<Task> =>
+    fetch(`/tasks/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ due_at: dueAt }),
+    }).then((r) => json(r)),
+
   deleteTask: (id: number): Promise<void> =>
     fetch(`/tasks/${id}`, { method: 'DELETE' }).then((r) => {
       if (!r.ok) throw new Error(`Request failed: ${r.status}`)
