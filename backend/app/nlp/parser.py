@@ -1,6 +1,6 @@
 import re
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import dateparser
 
@@ -15,7 +15,7 @@ _REL = r"today|tomorrow|tonight"
 _NEXT_THIS = rf"(?:next|this)\s+(?:week|month|year|{_DAY})"
 _IN_OFFSET = rf"in\s+{_NUM_WORD}\s+(?:min(?:ute)?s?|hrs?|hours?|days?|weeks?)"
 _RECUR_DAY = rf"every\s+{_DAY}"
-_RECUR_UNIT = r"every\s+(?:day|week|month)"
+_RECUR_UNIT = r"every\s+(?:weekday|day|week|month|year)"
 _URL_RE = re.compile(
     r"https?://\S+|(?:meet\.google\.com|zoom\.us|teams\.microsoft\.com)\S*", re.IGNORECASE
 )
@@ -34,8 +34,14 @@ _IN_OFFSET_RE = re.compile(rf"^{_IN_OFFSET}\b", re.IGNORECASE)
 _TIME_RE = re.compile(rf"\b(?:{_TIME})\b", re.IGNORECASE)
 _RECUR_DAY_RE = re.compile(rf"^every\s+{_DAY}", re.IGNORECASE)
 _NEXT_THIS_DAY_RE = re.compile(rf"^(?:next|this)\s+({_DAY})", re.IGNORECASE)
-_RECUR_UNIT_RE = re.compile(r"^every\s+(day|week|month)\b", re.IGNORECASE)
-_RECURRENCE_LABELS = {"day": "daily", "week": "weekly", "month": "monthly"}
+_RECUR_UNIT_RE = re.compile(r"^every\s+(weekday|day|week|month|year)\b", re.IGNORECASE)
+_RECURRENCE_LABELS = {
+    "weekday": "weekday",
+    "day": "daily",
+    "week": "weekly",
+    "month": "monthly",
+    "year": "yearly",
+}
 
 _CREATE_TRIGGERS = [
     r"^remind me to\s+",
@@ -145,6 +151,13 @@ def _parse_date_match(match: re.Match) -> DatePhrase:
     parsed = dateparser.parse(remainder, settings={"PREFER_DATES_FROM": "future"}) if remainder else None
     if parsed is None and recurrence is None:
         return DatePhrase(due_at=None, has_explicit_time=False)
+    if recurrence == "weekday" and parsed is not None:
+        # "every weekday" shouldn't ever land its first occurrence on a
+        # Saturday/Sunday just because that's the nearest future date/time —
+        # push it to the next Monday instead, same as the scheduler does for
+        # every occurrence after this one.
+        while parsed.weekday() >= 5:
+            parsed += timedelta(days=1)
     is_precise = bool(_TIME_RE.search(phrase)) or bool(_IN_OFFSET_RE.match(phrase))
     return DatePhrase(due_at=parsed, has_explicit_time=is_precise, recurrence=recurrence)
 

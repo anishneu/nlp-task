@@ -33,7 +33,7 @@ const FEATURES = [
   {
     icon: RepeatIcon,
     title: 'Recurring reminders',
-    body: 'Daily, weekly, or monthly tasks that reschedule themselves automatically after each occurrence.',
+    body: 'Daily, weekly, monthly, yearly, or weekday-only tasks that reschedule themselves automatically after each occurrence.',
   },
   {
     icon: CalendarIcon,
