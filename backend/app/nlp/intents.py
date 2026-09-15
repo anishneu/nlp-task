@@ -8,5 +8,6 @@ class Intent(str, enum.Enum):
     delete_task = "delete_task"
     update_task = "update_task"
     greeting = "greeting"
+    thanks = "thanks"
     set_name = "set_name"
     unknown = "unknown"

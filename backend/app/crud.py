@@ -124,13 +124,23 @@ def list_messages(db: Session, conversation_id: str) -> list[Message]:
 
 
 def add_message(
-    db: Session, conversation_id: str, role: MessageRole, content: str, intent: str | None = None
+    db: Session,
+    conversation_id: str,
+    role: MessageRole,
+    content: str,
+    intent: str | None = None,
+    title: str | None = None,
 ) -> Message:
+    """`title`, when given, is used as-is instead of calling generate_title()
+    here — callers that already know a title is needed (see chat.py) compute
+    it up front, often in parallel with the reply-rephrasing call, so this
+    doesn't pay for a second sequential HF round-trip.
+    """
     conversation = get_or_create_conversation(db, conversation_id)
     message = Message(conversation_id=conversation_id, role=role, content=content, intent=intent)
     db.add(message)
     if conversation.title is None and role == MessageRole.user:
-        conversation.title = generate_title(content) or content[:60]
+        conversation.title = title or generate_title(content) or content[:60]
     conversation.updated_at = clock.now()
     db.commit()
     db.refresh(message)
