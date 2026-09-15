@@ -108,7 +108,11 @@ _GREETING_RE = re.compile(
     rf"^(?:hi|hello|hey|yo|sup|howdy|{_TIME_GREETING})"
     rf"(?:[\s,]+\w+)?"  # optional name, e.g. "Hi Serene"
     rf"(?:[\s,]+{_TIME_GREETING})?"  # optional trailing "...  good morning"
-    rf"[\s!.,]*$",
+    # optional casual tail, e.g. "Hi Serene, how are you doing?" — this
+    # depended entirely on the external classifier before (nothing else
+    # here matched it), and that call has been unreliable all session.
+    rf"(?:[\s,]+how(?:'s| is| are)\s+(?:it going|things|you(?:\s+doing)?)\??)?"
+    rf"[\s!.,?]*$",
     re.IGNORECASE,
 )
 _NAME_QUERY_RE = re.compile(
@@ -748,3 +752,42 @@ def parse(text: str, bot_name: str | None = None, force_intent: Intent | None = 
         return ParsedMessage(intent=intent, raw_text=text, proposed_name=proposed_name or None)
 
     return ParsedMessage(intent=Intent.unknown, raw_text=text)
+
+
+_ACTION_INTENTS = {
+    Intent.create_task,
+    Intent.list_tasks,
+    Intent.complete_task,
+    Intent.delete_task,
+    Intent.update_task,
+}
+
+
+def split_compound_actions(text: str, bot_name: str | None = None) -> list[ParsedMessage] | None:
+    """Splits a message describing several distinct *actions* — "reschedule
+    X and delete Y" — into independent clauses, parsing each one exactly as
+    if it were its own standalone message (same classification +
+    extraction pipeline as parse(), just run once per clause).
+
+    Returns None whenever this doesn't look like a genuine mixed-action
+    compound request, so the caller falls back to today's single-action
+    handling of the whole message unchanged:
+    - fewer than 2 clauses resolve to their own real action, or
+    - every clause resolves to the *same* intent. In particular, an
+      all-create_task result ("remind me to call mom at 5pm and pick up
+      groceries at 6pm") is deliberately left alone — that's exactly what
+      the existing multi-task creation path in parse() already owns, with
+      LLM-segmentation escalation and title/date combining this function
+      doesn't reimplement, so handling it a second, simpler way here would
+      just risk double-processing the same message two different ways.
+    """
+    clauses = _split_into_clauses(text)
+    if len(clauses) < 2:
+        return None
+    parsed_clauses = [parse(c, bot_name) for c in clauses]
+    parsed_clauses = [p for p in parsed_clauses if p.intent in _ACTION_INTENTS]
+    if len(parsed_clauses) < 2:
+        return None
+    if len({p.intent for p in parsed_clauses}) < 2:
+        return None
+    return parsed_clauses

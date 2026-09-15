@@ -12,7 +12,14 @@ from app.nlp import phrasing
 from app.nlp.hf_reply import generate_title, rephrase_reply, summarize_task_title
 from app.nlp.hf_similarity import find_best_match_hf
 from app.nlp.intents import Intent
-from app.nlp.parser import ParsedMessage, extract_time_phrase, has_strong_intent_trigger, looks_like_new_event, parse
+from app.nlp.parser import (
+    ParsedMessage,
+    extract_time_phrase,
+    has_strong_intent_trigger,
+    looks_like_new_event,
+    parse,
+    split_compound_actions,
+)
 from app.schemas import ChatResponse, TaskCreate, TaskOut, TaskUpdate
 
 _ORDINAL_WORDS = {
@@ -143,6 +150,64 @@ def _handle_create_task(db: Session, parsed: ParsedMessage, conversation_id: str
         intent=Intent.create_task.value,
         task=TaskOut.model_validate(task),
     )
+
+
+def _try_execute_action_clause(db: Session, parsed: ParsedMessage) -> str:
+    """Fully executes one clause of a compound multi-action message (see
+    split_compound_actions) with no follow-up questions — a compound
+    message commits to resolving every action outright; a clause that
+    can't (task not found, more than one match, no time given for a
+    reschedule) is reported as such rather than kicking off a multi-turn
+    clarification for just one of several actions, which the single-slot
+    pending-clarification system has no good way to represent anyway.
+
+    Always returns a one-line result — success or explained failure —
+    never raises, so the caller can join every clause's line into one
+    combined reply regardless of how many of them actually went through.
+    """
+    if parsed.intent == Intent.create_task:
+        if parsed.task_specs or not parsed.title or parsed.date_is_ambiguous:
+            return "couldn't tell what to create from that part"
+        task = crud.create_task(
+            db,
+            TaskCreate(
+                title=_polish_title(parsed.title),
+                due_at=parsed.due_at,
+                recurrence=parsed.recurrence,
+                link=parsed.link,
+            ),
+        )
+        return f'created "{task.title}" for {_format_due(task.due_at)}'
+
+    if parsed.intent == Intent.list_tasks:
+        return "listing tasks isn't supported alongside other actions in one message — ask separately"
+
+    if not parsed.task_query:
+        return "wasn't clear which task that part meant"
+    matches = crud.find_tasks_by_title(db, parsed.task_query)
+    if not matches:
+        pending_tasks = crud.list_tasks(db, status=TaskStatus.pending)
+        hf_index = find_best_match_hf(parsed.task_query, [t.title for t in pending_tasks])
+        if hf_index is not None:
+            matches = [pending_tasks[hf_index]]
+    if not matches:
+        return f'couldn\'t find a task matching "{parsed.task_query}"'
+    if len(matches) > 1:
+        return f'found more than one task matching "{parsed.task_query}", so skipped it'
+    task = matches[0]
+    if parsed.intent == Intent.complete_task:
+        task = crud.update_task(db, task, TaskUpdate(status=TaskStatus.completed))
+        return f'marked "{task.title}" as completed'
+    if parsed.intent == Intent.delete_task:
+        title = task.title
+        crud.delete_task(db, task)
+        return f'deleted "{title}"'
+    if parsed.intent == Intent.update_task:
+        if parsed.due_at is None or parsed.date_is_ambiguous:
+            return f'wasn\'t given a clear time to reschedule "{task.title}" to, so skipped it'
+        task = crud.update_task(db, task, TaskUpdate(due_at=parsed.due_at, recurrence=parsed.recurrence))
+        return f'rescheduled "{task.title}" to {_format_due(task.due_at)}'
+    return "couldn't figure out that part"
 
 
 def _keywords(text: str) -> set[str]:
@@ -281,7 +346,7 @@ def _handle_followup(
 def _process_message(
     db: Session, text: str, conversation_id: str | None, bot_name: str | None
 ) -> ChatResponse:
-    current_name = bot_name or "Custom To-Do Bot"
+    current_name = bot_name or "Celine"
     if conversation_id:
         pending = crud.get_pending(db, conversation_id)
         if pending:
@@ -295,6 +360,14 @@ def _process_message(
                 return response
             # Couldn't interpret as an answer to the pending question — treat
             # this message as a fresh command instead of getting stuck.
+
+    compound = split_compound_actions(text, current_name)
+    if compound:
+        results = [_try_execute_action_clause(db, clause) for clause in compound]
+        return ChatResponse(
+            reply=phrasing.pick(phrasing.COMPOUND_ACTION, actions="; ".join(results)),
+            intent=Intent.compound_action.value,
+        )
 
     parsed = parse(text, current_name)
 
@@ -462,13 +535,13 @@ def handle_message(
     title = None
     if needs_rephrase and needs_title:
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-            rephrase_future = pool.submit(rephrase_reply, bot_name or "Custom To-Do Bot", response.reply)
+            rephrase_future = pool.submit(rephrase_reply, bot_name or "Celine", response.reply)
             title_future = pool.submit(generate_title, text)
             response.reply = rephrase_future.result()
             title = title_future.result()
     else:
         if needs_rephrase:
-            response.reply = rephrase_reply(bot_name or "Custom To-Do Bot", response.reply)
+            response.reply = rephrase_reply(bot_name or "Celine", response.reply)
         if needs_title:
             title = generate_title(text)
 

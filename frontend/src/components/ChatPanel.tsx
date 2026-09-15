@@ -1,13 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Message } from '../types'
 
-const EXAMPLES = [
-  'Remind me to submit my resume tomorrow at 9 AM',
-  'Remind me to call Mom on Friday at 6 PM',
-  'Show my tasks',
-  'Mark my resume task as completed',
-  'Delete the mom task',
-]
+const EXAMPLES = ['Show my tasks', 'Remind me to call Mom on Friday at 6 PM', 'Mark a task as completed']
 
 const LINK_RE = /(https?:\/\/\S+|meet\.google\.com\/\S+|zoom\.us\/\S+)/g
 
@@ -42,18 +36,29 @@ interface Props {
   onBotNameChange: (name: string) => void
   messages: Message[]
   onSend: (text: string) => void
+  isSending: boolean
 }
 
 const MAX_INPUT_HEIGHT_PX = 160
 
-export function ChatPanel({ botName, onBotNameChange, messages, onSend }: Props) {
+function TypingIndicator() {
+  return (
+    <div className="mr-auto flex max-w-[75%] items-center gap-1 self-start rounded-xl rounded-bl-sm bg-bubble-bot px-3.5 py-3">
+      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted [animation-delay:-0.2s]" />
+      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted [animation-delay:-0.1s]" />
+      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted" />
+    </div>
+  )
+}
+
+export function ChatPanel({ botName, onBotNameChange, messages, onSend, isSending }: Props) {
   const [input, setInput] = useState('')
   const logRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight })
-  }, [messages])
+  }, [messages, isSending])
 
   useEffect(() => {
     const el = textareaRef.current
@@ -64,7 +69,7 @@ export function ChatPanel({ botName, onBotNameChange, messages, onSend }: Props)
 
   function submitInput() {
     const text = input.trim()
-    if (!text) return
+    if (!text || isSending) return
     setInput('')
     onSend(text)
   }
@@ -142,6 +147,7 @@ export function ChatPanel({ botName, onBotNameChange, messages, onSend }: Props)
             </div>
           ))
         )}
+        {isSending && <TypingIndicator />}
       </div>
 
       <form onSubmit={handleSubmit} className="flex gap-2 border-t border-border p-3.5">
@@ -157,7 +163,8 @@ export function ChatPanel({ botName, onBotNameChange, messages, onSend }: Props)
         />
         <button
           type="submit"
-          className="self-end rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-white hover:opacity-90"
+          disabled={isSending}
+          className="self-end rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
         >
           Send
         </button>

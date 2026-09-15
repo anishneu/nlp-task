@@ -1,4 +1,4 @@
-const DEFAULT_BOT_NAME = 'Custom To-Do Bot'
+const DEFAULT_BOT_NAME = 'Celine'
 
 function safeGet(key: string): string | null {
   try {

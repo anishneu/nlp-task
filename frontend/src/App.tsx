@@ -15,6 +15,7 @@ export default function App() {
   const [conversationId, setConversationId] = useState(loadConversationId)
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [messages, setMessages] = useState<Message[]>([])
+  const [isSending, setIsSending] = useState(false)
   // Mirrors conversationId for use inside async callbacks (handleSend,
   // handleSelectConversation) — a plain closure over conversationId would
   // freeze at whatever it was when the async call started, so a reply that
@@ -44,8 +45,8 @@ export default function App() {
   }, [started])
 
   useEffect(() => {
-    document.title = started ? botName : 'Custom To-Do Bot'
-  }, [started, botName])
+    document.title = 'TodoWeave'
+  }, [])
 
   function handleBotNameChange(name: string) {
     setBotName(name)
@@ -58,6 +59,7 @@ export default function App() {
       ...prev,
       { id: Date.now(), role: 'user', content: text, intent: null, created_at: new Date().toISOString() },
     ])
+    setIsSending(true)
     try {
       const data = await api.chat(text, conversationId, botName)
       // The user may have switched to a different (or new) chat while this
@@ -90,6 +92,7 @@ export default function App() {
         ])
       }
     }
+    if (conversationIdRef.current === sentForId) setIsSending(false)
     refreshTasks()
     refreshConversations()
   }
@@ -99,11 +102,13 @@ export default function App() {
     setConversationId(id)
     saveConversationId(id)
     setMessages([])
+    setIsSending(false)
   }
 
   async function handleSelectConversation(id: string) {
     setConversationId(id)
     saveConversationId(id)
+    setIsSending(false)
     const history = await api.listMessages(id)
     // Guards against the same race as handleSend — if the user clicked
     // another conversation again before this one's history came back, don't
@@ -159,6 +164,7 @@ export default function App() {
           onBotNameChange={handleBotNameChange}
           messages={messages}
           onSend={handleSend}
+          isSending={isSending}
         />
       </div>
       <div className="flex-1">

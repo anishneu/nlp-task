@@ -12,7 +12,7 @@ run_migrations()
 
 STATIC_DIR = Path(__file__).parent / "static"
 
-app = FastAPI(title="Custom To-Do Bot API")
+app = FastAPI(title="TodoWeave API")
 app.include_router(tasks.router)
 app.include_router(chat.router)
 app.include_router(reminders.router)
