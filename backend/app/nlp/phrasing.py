@@ -130,3 +130,9 @@ UNKNOWN = [
     'Sorry, I\'m not sure what you mean. Try something like "Remind me to call Mom on Friday at 6 PM."',
     'Hmm, that didn\'t quite land. Try something like "Remind me to call Mom on Friday at 6 PM."',
 ]
+
+COMPOUND_ACTION = [
+    "Done — {actions}.",
+    "All set — {actions}.",
+    "Got it — {actions}.",
+]

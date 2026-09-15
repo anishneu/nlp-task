@@ -7,6 +7,7 @@ class Intent(str, enum.Enum):
     complete_task = "complete_task"
     delete_task = "delete_task"
     update_task = "update_task"
+    compound_action = "compound_action"
     greeting = "greeting"
     thanks = "thanks"
     set_name = "set_name"

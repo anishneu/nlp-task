@@ -1,4 +1,4 @@
-# Customizable NLP-Based Task & Reminder Chat Assistant
+# TodoWeave: NLP-Based Task & Reminder Chat Assistant
 
 Conversational task & reminder assistant — natural-language scheduling backed by a structured task API.
 
@@ -112,8 +112,8 @@ Counted directly from the codebase, not estimated:
 Requires Python 3.10+ and Node 18+.
 
 ```bash
-git clone https://github.com/anishneu/nlp-task.git custom-todo-bot
-cd custom-todo-bot/backend
+git clone https://github.com/anishneu/nlp-task.git todoweave
+cd todoweave/backend
 python -m venv venv
 venv/Scripts/activate    # venv\Scripts\activate on Windows cmd, source venv/bin/activate on macOS/Linux
 pip install -r requirements.txt
@@ -148,7 +148,7 @@ venv/Scripts/activate    # venv\Scripts\activate on Windows cmd, source venv/bin
 uvicorn app.main:app --port 8000
 ```
 
-Open `http://127.0.0.1:8000/` — FastAPI now serves the built frontend directly, no separate frontend server. A `todo_bot.db` SQLite file is created automatically on first run; point `DATABASE_URL` at a MySQL/Postgres instance to use that instead. To enable ML-backed intent classification and task matching, set `HF_TOKEN` in `backend/.env` to a free token from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) — without it, the app runs entirely on the rule-based parser with no loss of functionality. Reply rephrasing and title generation additionally need `HF_REPLY_ENABLED=true` — they're off by default because, unlike the other two, they'd run on nearly every message and add several seconds of latency each time. Every due date and timestamp is computed using the server process's own system timezone by default; if that machine isn't in your own timezone (a cloud host, a container, a dev sandbox), set `APP_TIMEZONE` in `backend/.env` to an IANA name like `America/New_York` so "today"/"tomorrow"/bare times resolve against where you actually are.
+Open `http://127.0.0.1:8000/` — FastAPI now serves the built frontend directly, no separate frontend server. A `todo_bot.db` SQLite file is created automatically on first run (the filename is a legacy internal default, kept as-is for existing installs so it doesn't orphan anyone's data); point `DATABASE_URL` at a MySQL/Postgres instance to use that instead. To enable ML-backed intent classification and task matching, set `HF_TOKEN` in `backend/.env` to a free token from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) — without it, the app runs entirely on the rule-based parser with no loss of functionality. Reply rephrasing and title generation additionally need `HF_REPLY_ENABLED=true` — they're off by default because, unlike the other two, they'd run on nearly every message and add several seconds of latency each time. Every due date and timestamp is computed using the server process's own system timezone by default; if that machine isn't in your own timezone (a cloud host, a container, a dev sandbox), set `APP_TIMEZONE` in `backend/.env` to an IANA name like `America/New_York` so "today"/"tomorrow"/bare times resolve against where you actually are.
 
 ### Or with Docker
 
@@ -157,7 +157,7 @@ cp .env.example .env   # optional — fill in HF_TOKEN to enable ML-backed featu
 docker compose up --build
 ```
 
-Builds the frontend and the API into one image (multi-stage build). Same app, same `/` UI, at `http://localhost:8000/`. The SQLite database lives in a named volume (`todo_bot_data`) so it survives container restarts.
+Builds the frontend and the API into one image (multi-stage build). Same app, same `/` UI, at `http://localhost:8000/`. The SQLite database lives in a named volume (`todoweave_data`) so it survives container restarts.
 
 ## Database migrations
 

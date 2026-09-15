@@ -77,6 +77,10 @@ export function LandingPage({ onGetStarted }: Props) {
       <BackgroundGlow />
 
       <div className="relative mx-auto flex max-w-5xl flex-col px-6 pb-24 pt-20 sm:pt-28">
+        <div className="mb-8 flex items-center justify-center gap-2 text-3xl font-extrabold tracking-tight text-accent sm:text-4xl">
+          TodoWeave
+        </div>
+
         <Reveal>
           <div className="mx-auto flex items-center gap-2 rounded-full border border-border bg-panel/60 px-4 py-1.5 text-xs font-medium text-muted backdrop-blur">
             <span className="relative flex h-2 w-2">
@@ -304,7 +308,7 @@ function ChatDemo() {
         <span className="h-2.5 w-2.5 rounded-full bg-red-400/70" />
         <span className="h-2.5 w-2.5 rounded-full bg-yellow-400/70" />
         <span className="h-2.5 w-2.5 rounded-full bg-green-400/70" />
-        <span className="ml-2 text-xs text-muted">Custom To-Do Bot</span>
+        <span className="ml-2 text-xs text-muted">TodoWeave</span>
       </div>
 
       <div className="flex min-h-[104px] flex-col gap-2.5 text-sm">
