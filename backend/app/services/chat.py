@@ -1,3 +1,4 @@
+import concurrent.futures
 import re
 from datetime import date, datetime, time
 
@@ -5,11 +6,13 @@ import dateparser
 from sqlalchemy.orm import Session
 
 from app import clock, crud
+from app.config import HF_REPLY_ENABLED
 from app.models import ClarificationKind, MessageRole, PendingClarification, Task, TaskStatus
-from app.nlp.hf_reply import rephrase_reply
+from app.nlp import phrasing
+from app.nlp.hf_reply import generate_title, rephrase_reply, summarize_task_title
 from app.nlp.hf_similarity import find_best_match_hf
 from app.nlp.intents import Intent
-from app.nlp.parser import parse
+from app.nlp.parser import ParsedMessage, extract_time_phrase, has_strong_intent_trigger, looks_like_new_event, parse
 from app.schemas import ChatResponse, TaskCreate, TaskOut, TaskUpdate
 
 _ORDINAL_WORDS = {
@@ -51,7 +54,95 @@ def _format_confirmation(title: str, due_at, recurrence: str | None, link: str |
     when = f" for {_format_due(due_at)}" if due_at else ""
     repeats = f", repeating {_format_recurrence(recurrence)}" if recurrence else ""
     link_note = f" Join here: {link}" if link else ""
-    return f'Got it — I\'ve scheduled "{title}"{when}{repeats}.{link_note}'
+    return phrasing.pick(phrasing.CONFIRM_TASK, title=title, when=when, repeats=repeats, link_note=link_note)
+
+
+def _format_rescheduled(task: Task) -> str:
+    return phrasing.pick(phrasing.RESCHEDULED, title=task.title, due=_format_due(task.due_at))
+
+
+def _format_deleted(title: str) -> str:
+    return phrasing.pick(phrasing.DELETED, title=title)
+
+
+def _polish_title(raw_title: str) -> str:
+    """Runs a single task title through summarize_task_title(), falling
+    back to the regex-cleaned title as-is if HF is off/unavailable.
+    """
+    return summarize_task_title(raw_title) or raw_title
+
+
+def _polish_titles(raw_titles: list[str]) -> list[str]:
+    """Same as _polish_title, but for several titles at once (a multi-task
+    message) — fired concurrently so N titles cost roughly one call's worth
+    of wall-clock time instead of N sequential round-trips.
+    """
+    if not HF_REPLY_ENABLED or not raw_titles:
+        return raw_titles
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(raw_titles)) as pool:
+        results = list(pool.map(summarize_task_title, raw_titles))
+    return [polished or raw for polished, raw in zip(results, raw_titles)]
+
+
+def _handle_create_task(db: Session, parsed: ParsedMessage, conversation_id: str | None) -> ChatResponse:
+    """Handles an already-parsed create_task message — factored out of the
+    main create_task branch so the complete/delete/update branch can also
+    call it directly on a retry (see looks_like_new_event in
+    _process_message), reusing the exact same task-creation logic instead
+    of a second, subtly-different copy of it.
+    """
+    if parsed.task_specs:
+        polished_titles = _polish_titles([s.title for s in parsed.task_specs])
+        tasks = [
+            crud.create_task(
+                db,
+                TaskCreate(title=title, due_at=s.due_at, recurrence=s.recurrence, link=s.link),
+            )
+            for s, title in zip(parsed.task_specs, polished_titles)
+        ]
+        lines = [f'- "{t.title}" for {_format_due(t.due_at)}' for t in tasks]
+        noun = "task" if len(tasks) == 1 else "tasks"
+        reply = phrasing.pick(phrasing.CONFIRM_MULTI, n=len(tasks), noun=noun, lines="\n".join(lines))
+        return ChatResponse(
+            reply=reply,
+            intent=Intent.create_task.value,
+            tasks=[TaskOut.model_validate(t) for t in tasks],
+        )
+    if not parsed.title:
+        return ChatResponse(
+            reply=phrasing.pick(phrasing.ASK_TITLE),
+            intent=Intent.create_task.value,
+        )
+    if parsed.date_is_ambiguous:
+        base_date = parsed.due_at.date() if parsed.due_at else clock.now().date()
+        if conversation_id:
+            crud.set_pending(
+                db,
+                conversation_id,
+                kind=ClarificationKind.awaiting_time,
+                title=parsed.title,
+                base_date=base_date.isoformat(),
+                recurrence=parsed.recurrence,
+                link=parsed.link,
+            )
+        return ChatResponse(
+            reply=phrasing.pick(phrasing.ASK_TIME, title=parsed.title),
+            intent=Intent.create_task.value,
+        )
+    task = crud.create_task(
+        db,
+        TaskCreate(
+            title=_polish_title(parsed.title),
+            due_at=parsed.due_at,
+            recurrence=parsed.recurrence,
+            link=parsed.link,
+        ),
+    )
+    return ChatResponse(
+        reply=_format_confirmation(task.title, task.due_at, task.recurrence, task.link),
+        intent=Intent.create_task.value,
+        task=TaskOut.model_validate(task),
+    )
 
 
 def _keywords(text: str) -> set[str]:
@@ -91,10 +182,26 @@ def _resolve_choice(text: str, candidates: list[Task]) -> Task | None:
 def _handle_followup(
     db: Session, pending: PendingClarification, text: str, conversation_id: str
 ) -> ChatResponse | None:
+    # A message carrying its own strong command trigger ("schedule...",
+    # "remind me...", "delete...") is a fresh command, not an answer to the
+    # pending question — even if it happens to also contain a parseable
+    # time (extract_time_phrase below would find "3pm" in "schedule a
+    # meeting with team tomorrow at 3pm" just fine) or overlap a candidate
+    # task's title. Bail out so it falls through to be processed as a new
+    # command instead of getting silently swallowed into the old one.
+    if has_strong_intent_trigger(text):
+        return None
+
     if pending.kind == ClarificationKind.awaiting_time:
         base_date = date.fromisoformat(pending.base_date)
+        # Try the bare extracted time first — "10am in the morning" fails
+        # to parse at all as a whole (dateparser chokes on the redundant
+        # "in the morning"), even though "10am" alone parses cleanly. Falls
+        # back to the raw reply for anything that isn't a bare clock time
+        # (e.g. "tomorrow"), same as before.
+        time_phrase = extract_time_phrase(text) or text
         parsed_dt = dateparser.parse(
-            text,
+            time_phrase,
             settings={"RELATIVE_BASE": datetime.combine(base_date, time.min), "PREFER_DATES_FROM": "future"},
         )
         if parsed_dt is None:
@@ -106,14 +213,14 @@ def _handle_followup(
                 return None
             task = crud.update_task(db, task, TaskUpdate(due_at=parsed_dt, recurrence=pending.recurrence))
             return ChatResponse(
-                reply=f'Got it — rescheduled "{task.title}" to {_format_due(task.due_at)}.',
+                reply=_format_rescheduled(task),
                 intent=pending.action,
                 task=TaskOut.model_validate(task),
             )
         task = crud.create_task(
             db,
             TaskCreate(
-                title=pending.title,
+                title=_polish_title(pending.title),
                 due_at=parsed_dt,
                 recurrence=pending.recurrence,
                 link=pending.link,
@@ -134,7 +241,7 @@ def _handle_followup(
         if pending.action == Intent.complete_task.value:
             task = crud.update_task(db, chosen, TaskUpdate(status=TaskStatus.completed))
             return ChatResponse(
-                reply=f'Marked "{task.title}" as completed.',
+                reply=phrasing.pick(phrasing.MARKED_DONE, title=task.title),
                 intent=pending.action,
                 task=TaskOut.model_validate(task),
             )
@@ -154,19 +261,19 @@ def _handle_followup(
                     recurrence=pending.recurrence,
                 )
                 return ChatResponse(
-                    reply=f'Got it, "{chosen.title}" — what time should I reschedule it to?',
+                    reply=phrasing.pick(phrasing.ASK_RESCHEDULE_TIME_CHAINED, title=chosen.title),
                     intent=pending.action,
                 )
             task = crud.update_task(
                 db, chosen, TaskUpdate(due_at=pending.pending_due_at, recurrence=pending.recurrence)
             )
             return ChatResponse(
-                reply=f'Got it — rescheduled "{task.title}" to {_format_due(task.due_at)}.',
+                reply=_format_rescheduled(task),
                 intent=pending.action,
                 task=TaskOut.model_validate(task),
             )
         crud.delete_task(db, chosen)
-        return ChatResponse(reply=f'Deleted "{chosen.title}".', intent=pending.action)
+        return ChatResponse(reply=_format_deleted(chosen.title), intent=pending.action)
 
     return None
 
@@ -192,75 +299,26 @@ def _process_message(
     parsed = parse(text, current_name)
 
     if parsed.intent == Intent.create_task:
-        if parsed.task_specs:
-            tasks = [
-                crud.create_task(
-                    db,
-                    TaskCreate(title=s.title, due_at=s.due_at, recurrence=s.recurrence, link=s.link),
-                )
-                for s in parsed.task_specs
-            ]
-            lines = [f'- "{t.title}" for {_format_due(t.due_at)}' for t in tasks]
-            reply = f"Got it — I've scheduled {len(tasks)} things:\n" + "\n".join(lines)
-            return ChatResponse(
-                reply=reply,
-                intent=parsed.intent.value,
-                tasks=[TaskOut.model_validate(t) for t in tasks],
-            )
-        if not parsed.title:
-            return ChatResponse(
-                reply="What would you like the reminder to be about?",
-                intent=parsed.intent.value,
-            )
-        if parsed.date_is_ambiguous:
-            base_date = parsed.due_at.date() if parsed.due_at else clock.now().date()
-            if conversation_id:
-                crud.set_pending(
-                    db,
-                    conversation_id,
-                    kind=ClarificationKind.awaiting_time,
-                    title=parsed.title,
-                    base_date=base_date.isoformat(),
-                    recurrence=parsed.recurrence,
-                    link=parsed.link,
-                )
-            return ChatResponse(
-                reply=f'What time should I remind you to "{parsed.title}"?',
-                intent=parsed.intent.value,
-            )
-        task = crud.create_task(
-            db,
-            TaskCreate(
-                title=parsed.title,
-                due_at=parsed.due_at,
-                recurrence=parsed.recurrence,
-                link=parsed.link,
-            ),
-        )
-        return ChatResponse(
-            reply=_format_confirmation(task.title, task.due_at, task.recurrence, task.link),
-            intent=parsed.intent.value,
-            task=TaskOut.model_validate(task),
-        )
+        return _handle_create_task(db, parsed, conversation_id)
 
     if parsed.intent == Intent.list_tasks:
         tasks = crud.list_tasks(db, status=parsed.status_filter)
         if parsed.due_on:
             tasks = [t for t in tasks if t.due_at and t.due_at.date() == parsed.due_on]
         if not tasks:
-            return ChatResponse(reply="You have no matching tasks.", intent=parsed.intent.value, tasks=[])
+            return ChatResponse(reply=phrasing.pick(phrasing.NO_TASKS), intent=parsed.intent.value, tasks=[])
         lines = [
             f"- {t.title}" + (f" ({_format_due(t.due_at)})" if t.due_at else "") for t in tasks
         ]
         return ChatResponse(
-            reply=f"You have {len(tasks)} task(s):\n" + "\n".join(lines),
+            reply=phrasing.pick(phrasing.LIST_TASKS, n=len(tasks), lines="\n".join(lines)),
             intent=parsed.intent.value,
             tasks=[TaskOut.model_validate(t) for t in tasks],
         )
 
     if parsed.intent in (Intent.complete_task, Intent.delete_task, Intent.update_task):
         if not parsed.task_query:
-            return ChatResponse(reply="Which task do you mean?", intent=parsed.intent.value)
+            return ChatResponse(reply=phrasing.pick(phrasing.WHICH_TASK), intent=parsed.intent.value)
         matches = crud.find_tasks_by_title(db, parsed.task_query)
         if not matches:
             pending_tasks = crud.list_tasks(db, status=TaskStatus.pending)
@@ -268,8 +326,19 @@ def _process_message(
             if hf_index is not None:
                 matches = [pending_tasks[hf_index]]
         if not matches:
+            # The zero-shot classifier can confidently — and wrongly — read
+            # a plain description of a new event as a request to
+            # reschedule/complete/delete something, when no regex trigger
+            # for that action fired at all. Retrying as create_task means a
+            # message like "I have a dentist appointment Friday at 2pm"
+            # still creates the task instead of dead-ending on "I couldn't
+            # find a task matching ...", which would be actively
+            # misleading — the user was never trying to change anything.
+            if not has_strong_intent_trigger(text) and looks_like_new_event(text):
+                retry = parse(text, current_name, force_intent=Intent.create_task)
+                return _handle_create_task(db, retry, conversation_id)
             return ChatResponse(
-                reply=f'I couldn\'t find a task matching "{parsed.task_query}".',
+                reply=phrasing.pick(phrasing.NOT_FOUND, query=parsed.task_query),
                 intent=parsed.intent.value,
             )
         # A reschedule with no resolvable time at all, or a date with no
@@ -292,7 +361,7 @@ def _process_message(
                 )
             titles = ", ".join(f'{i + 1}) "{m.title}"' for i, m in enumerate(matches))
             return ChatResponse(
-                reply=f"I found multiple matching tasks: {titles}. Which one did you mean?",
+                reply=phrasing.pick(phrasing.MULTI_MATCH, titles=titles),
                 intent=parsed.intent.value,
                 tasks=[TaskOut.model_validate(m) for m in matches],
             )
@@ -300,7 +369,7 @@ def _process_message(
         if parsed.intent == Intent.complete_task:
             task = crud.update_task(db, task, TaskUpdate(status=TaskStatus.completed))
             return ChatResponse(
-                reply=f'Marked "{task.title}" as completed.',
+                reply=phrasing.pick(phrasing.MARKED_DONE, title=task.title),
                 intent=parsed.intent.value,
                 task=TaskOut.model_validate(task),
             )
@@ -318,42 +387,48 @@ def _process_message(
                         recurrence=parsed.recurrence,
                     )
                 return ChatResponse(
-                    reply=f'What time should I reschedule "{task.title}" to?',
+                    reply=phrasing.pick(phrasing.ASK_RESCHEDULE_TIME, title=task.title),
                     intent=parsed.intent.value,
                 )
             task = crud.update_task(
                 db, task, TaskUpdate(due_at=parsed.due_at, recurrence=parsed.recurrence)
             )
             return ChatResponse(
-                reply=f'Got it — rescheduled "{task.title}" to {_format_due(task.due_at)}.',
+                reply=_format_rescheduled(task),
                 intent=parsed.intent.value,
                 task=TaskOut.model_validate(task),
             )
         crud.delete_task(db, task)
-        return ChatResponse(reply=f'Deleted "{task.title}".', intent=parsed.intent.value)
+        return ChatResponse(reply=_format_deleted(task.title), intent=parsed.intent.value)
 
     if parsed.intent == Intent.greeting:
         time_of_day_match = re.search(r"\bgood (morning|afternoon|evening)\b", text, re.IGNORECASE)
         greeting = f"Good {time_of_day_match.group(1).lower()}!" if time_of_day_match else "Hi there!"
         return ChatResponse(
-            reply=f"{greeting} I'm {current_name}, your virtual chatbot assistant. How may I help you?",
+            reply=phrasing.pick(phrasing.GREETING, greeting=greeting, name=current_name),
+            intent=parsed.intent.value,
+        )
+
+    if parsed.intent == Intent.thanks:
+        return ChatResponse(
+            reply=phrasing.pick(phrasing.THANKS),
             intent=parsed.intent.value,
         )
 
     if parsed.intent == Intent.set_name:
         if parsed.proposed_name:
             return ChatResponse(
-                reply=f"Sure, you can call me {parsed.proposed_name} from now on!",
+                reply=phrasing.pick(phrasing.SET_NAME_CONFIRM, name=parsed.proposed_name),
                 intent=parsed.intent.value,
                 bot_name=parsed.proposed_name,
             )
         return ChatResponse(
-            reply=f'You can call me {current_name}. Just say "call me <name>" to rename me.',
+            reply=phrasing.pick(phrasing.SET_NAME_QUERY, name=current_name),
             intent=parsed.intent.value,
         )
 
     return ChatResponse(
-        reply='I didn\'t understand that. Try something like "Remind me to call Mom on Friday at 6 PM."',
+        reply=phrasing.pick(phrasing.UNKNOWN),
         intent=parsed.intent.value,
     )
 
@@ -362,24 +437,42 @@ def handle_message(
     db: Session, text: str, conversation_id: str | None = None, bot_name: str | None = None
 ) -> ChatResponse:
     response = _process_message(db, text, conversation_id, bot_name)
-    if response.intent == Intent.unknown.value:
-        # The "unknown" fallback embeds a quoted usage example ("Remind me
-        # to call Mom...") — small rephrasing models sometimes read that as
-        # literal context and hallucinate a fact from it (e.g. asking when
-        # to "call Mom" in a conversation that never mentioned Mom). The
-        # generic fallback doesn't gain much from rephrasing anyway, so it's
-        # left as the reliable plain template instead of risking that.
-        pass
-    elif response.intent == Intent.greeting.value:
-        # The rephrase prompt only promises to preserve "facts" (names,
-        # dates, times, links) — a "Good morning!" echo isn't one of those,
-        # so the model is free to (and did, in testing) swap it for a
-        # generic "Hey there!", silently undoing the whole point of
-        # matching the user's own greeting. Keep this one deterministic.
-        pass
+
+    # The "unknown" fallback embeds a quoted usage example ("Remind me to
+    # call Mom...") — small rephrasing models sometimes read that as literal
+    # context and hallucinate a fact from it. "greeting"'s rephrase prompt
+    # only promises to preserve *facts*, and a "Good morning!" echo isn't
+    # one, so the model is free to (and did, in testing) swap it for a
+    # generic "Hey there!". Both are kept deterministic instead of risking
+    # that — and neither gains much from rephrasing anyway.
+    needs_rephrase = HF_REPLY_ENABLED and response.intent not in (Intent.unknown.value, Intent.greeting.value)
+    # A brand-new conversation also gets its title generated by an HF call
+    # (same model, different prompt) the moment it sees its first user
+    # message. Left sequential, that meant every new chat's first message
+    # paid for two back-to-back external LLM round-trips instead of one —
+    # firing them concurrently below (they don't depend on each other at
+    # all) cuts that back down to roughly the cost of a single call. Skipped
+    # entirely (no DB lookup either) when HF_REPLY_ENABLED is off.
+    needs_title = (
+        HF_REPLY_ENABLED
+        and bool(conversation_id)
+        and crud.get_or_create_conversation(db, conversation_id).title is None
+    )
+
+    title = None
+    if needs_rephrase and needs_title:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            rephrase_future = pool.submit(rephrase_reply, bot_name or "Custom To-Do Bot", response.reply)
+            title_future = pool.submit(generate_title, text)
+            response.reply = rephrase_future.result()
+            title = title_future.result()
     else:
-        response.reply = rephrase_reply(bot_name or "Custom To-Do Bot", response.reply)
+        if needs_rephrase:
+            response.reply = rephrase_reply(bot_name or "Custom To-Do Bot", response.reply)
+        if needs_title:
+            title = generate_title(text)
+
     if conversation_id:
-        crud.add_message(db, conversation_id, MessageRole.user, text)
+        crud.add_message(db, conversation_id, MessageRole.user, text, title=title)
         crud.add_message(db, conversation_id, MessageRole.bot, response.reply, response.intent)
     return response

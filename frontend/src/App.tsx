@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api'
 import { ChatPanel } from './components/ChatPanel'
 import { LandingPage } from './components/LandingPage'
@@ -15,6 +15,15 @@ export default function App() {
   const [conversationId, setConversationId] = useState(loadConversationId)
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [messages, setMessages] = useState<Message[]>([])
+  // Mirrors conversationId for use inside async callbacks (handleSend,
+  // handleSelectConversation) — a plain closure over conversationId would
+  // freeze at whatever it was when the async call started, so a reply that
+  // arrives after the user has switched to a different chat would still
+  // pass the (now stale) check and get appended to the wrong conversation.
+  const conversationIdRef = useRef(conversationId)
+  useEffect(() => {
+    conversationIdRef.current = conversationId
+  }, [conversationId])
 
   const refreshTasks = useCallback(() => {
     void api.listTasks().then(setTasks)
@@ -44,35 +53,42 @@ export default function App() {
   }
 
   async function handleSend(text: string) {
+    const sentForId = conversationId
     setMessages((prev) => [
       ...prev,
       { id: Date.now(), role: 'user', content: text, intent: null, created_at: new Date().toISOString() },
     ])
     try {
       const data = await api.chat(text, conversationId, botName)
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now() + 1,
-          role: 'bot',
-          content: data.reply,
-          intent: data.intent,
-          created_at: new Date().toISOString(),
-        },
-      ])
+      // The user may have switched to a different (or new) chat while this
+      // was in flight — only append the reply if it's still the active one.
+      if (conversationIdRef.current === sentForId) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: Date.now() + 1,
+            role: 'bot',
+            content: data.reply,
+            intent: data.intent,
+            created_at: new Date().toISOString(),
+          },
+        ])
+      }
       if (data.bot_name) handleBotNameChange(data.bot_name)
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now() + 2,
-          role: 'bot',
-          content: `Error reaching the server: ${message}`,
-          intent: null,
-          created_at: new Date().toISOString(),
-        },
-      ])
+      if (conversationIdRef.current === sentForId) {
+        const message = err instanceof Error ? err.message : String(err)
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: Date.now() + 2,
+            role: 'bot',
+            content: `Error reaching the server: ${message}`,
+            intent: null,
+            created_at: new Date().toISOString(),
+          },
+        ])
+      }
     }
     refreshTasks()
     refreshConversations()
@@ -89,7 +105,12 @@ export default function App() {
     setConversationId(id)
     saveConversationId(id)
     const history = await api.listMessages(id)
-    setMessages(history)
+    // Guards against the same race as handleSend — if the user clicked
+    // another conversation again before this one's history came back, don't
+    // clobber it with the now-stale response.
+    if (conversationIdRef.current === id) {
+      setMessages(history)
+    }
   }
 
   async function handleDeleteConversation(id: string) {

@@ -115,25 +115,33 @@ export function ChatPanel({ botName, onBotNameChange, messages, onSend }: Props)
       </div>
 
       <div ref={logRef} className="chat-scroll flex flex-1 flex-col gap-2.5 overflow-y-auto p-4">
-        {messages.map((m) => (
-          <div
-            key={m.id}
-            className={`max-w-[75%] rounded-xl px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap ${
-              m.role === 'user'
-                ? 'self-end rounded-br-sm bg-accent text-white'
-                : 'self-start rounded-bl-sm bg-bubble-bot'
-            }`}
-          >
-            {linkify(m.content)}
-            <span
-              className={`mt-1.5 block text-[11px] ${
-                m.role === 'user' ? 'text-white/70' : 'text-muted'
+        {messages.length === 0 ? (
+          <div className="m-auto flex flex-col items-center gap-1.5 text-center">
+            <span className="text-2xl">💬</span>
+            <span className="text-sm font-medium">New chat</span>
+            <span className="text-xs text-muted">Send a message below, or try one of the examples above.</span>
+          </div>
+        ) : (
+          messages.map((m) => (
+            <div
+              key={m.id}
+              className={`max-w-[75%] rounded-xl px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap ${
+                m.role === 'user'
+                  ? 'self-end rounded-br-sm bg-accent text-white'
+                  : 'self-start rounded-bl-sm bg-bubble-bot'
               }`}
             >
-              {formatTime(m.created_at)}
-            </span>
-          </div>
-        ))}
+              {linkify(m.content)}
+              <span
+                className={`mt-1.5 block text-[11px] ${
+                  m.role === 'user' ? 'text-white/70' : 'text-muted'
+                }`}
+              >
+                {formatTime(m.created_at)}
+              </span>
+            </div>
+          ))
+        )}
       </div>
 
       <form onSubmit={handleSubmit} className="flex gap-2 border-t border-border p-3.5">

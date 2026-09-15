@@ -9,6 +9,7 @@ services:
       DATABASE_URL: sqlite:////app/data/todo_bot.db
       HF_TOKEN: ${HF_TOKEN:-}
       HF_INTENT_MODEL: ${HF_INTENT_MODEL:-facebook/bart-large-mnli}
+      HF_REPLY_ENABLED: ${HF_REPLY_ENABLED:-false}
       HF_REPLY_MODEL: ${HF_REPLY_MODEL:-google/gemma-2-2b-it:featherless-ai}
       HF_REPLY_FALLBACK_MODEL: ${HF_REPLY_FALLBACK_MODEL:-meta-llama/Llama-3.1-8B-Instruct:novita}
       APP_TIMEZONE: ${APP_TIMEZONE:-}
