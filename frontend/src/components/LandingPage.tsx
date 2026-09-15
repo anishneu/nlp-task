@@ -77,7 +77,7 @@ export function LandingPage({ onGetStarted }: Props) {
       <BackgroundGlow />
 
       <div className="relative mx-auto flex max-w-5xl flex-col px-6 pb-24 pt-20 sm:pt-28">
-        <div className="mb-8 flex items-center justify-center gap-2 text-lg font-extrabold tracking-tight">
+        <div className="mb-8 flex items-center justify-center gap-2 text-3xl font-extrabold tracking-tight text-accent sm:text-4xl">
           TodoWeave
         </div>
 

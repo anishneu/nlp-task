@@ -361,6 +361,23 @@ def _process_message(
             # Couldn't interpret as an answer to the pending question — treat
             # this message as a fresh command instead of getting stuck.
 
+    parsed = parse(text, current_name)
+
+    # A message that already resolves to several distinct tasks via the
+    # dedicated multi-task pipeline (LLM-segmentation escalation and all)
+    # takes priority over the compound-action splitter below — that
+    # splitter re-classifies each clause independently, from scratch, with
+    # no memory of the rest of the sentence. A clause split away from the
+    # word that actually signaled create_task ("...I have an interview in
+    # an hour and night shift ... can u put a reminder for me on these?" —
+    # "reminder" ends up in the *other* clause) can get misclassified as a
+    # completely different intent once it's standing alone, silently
+    # turning "create two tasks" into "couldn't find a task matching
+    # <garbled interview clause>". Using the already-correct multi-spec
+    # result instead avoids re-deriving intent per clause at all.
+    if parsed.intent == Intent.create_task and parsed.task_specs:
+        return _handle_create_task(db, parsed, conversation_id)
+
     compound = split_compound_actions(text, current_name)
     if compound:
         results = [_try_execute_action_clause(db, clause) for clause in compound]
@@ -368,8 +385,6 @@ def _process_message(
             reply=phrasing.pick(phrasing.COMPOUND_ACTION, actions="; ".join(results)),
             intent=Intent.compound_action.value,
         )
-
-    parsed = parse(text, current_name)
 
     if parsed.intent == Intent.create_task:
         return _handle_create_task(db, parsed, conversation_id)

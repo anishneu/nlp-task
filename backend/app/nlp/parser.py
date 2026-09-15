@@ -20,7 +20,7 @@ _PERIOD_TO_AMPM = {"morning": "am", "afternoon": "pm", "evening": "pm", "night":
 _REL = r"today|tomorrow|tonight"
 _DAY_AFTER_TOMORROW = r"(?:the\s+)?day after tomorrow"
 _NEXT_THIS = rf"(?:next|this)\s+(?:week|month|year|{_DAY})"
-_IN_OFFSET = rf"in\s+{_NUM_WORD}\s+(?:min(?:ute)?s?|hrs?|hours?|days?|weeks?)"
+_IN_OFFSET = rf"in\s+(?:the\s+)?(?:next\s+)?{_NUM_WORD}\s+(?:min(?:ute)?s?|hrs?|hours?|days?|weeks?)"
 _RECUR_DAY = rf"every\s+{_DAY}"
 _RECUR_UNIT = r"every\s+(?:weekday|day|week|month|year)"
 _RECUR_INTERVAL = r"every\s+\d+\s+(?:days?|weeks?|months?)"
@@ -69,7 +69,12 @@ _CREATE_TRIGGERS = [
 ]
 _CREATE_TRIGGER_ANYWHERE_RE = re.compile(
     r"\bremind me\b(?:\s+(?:that|to|of))?\s*"
-    r"|\breminder\b(?:\s+(?:that|to|of))?\s*"
+    # A polite lead-in right before "reminder" ("can u put a reminder for
+    # me...") is swallowed as part of the same match — otherwise it's left
+    # dangling on the "before" side of the split, attached to whatever real
+    # content came right before it (e.g. a second task's title).
+    r"|(?:(?:can|could|would)\s+(?:you|u)\s+(?:please\s+)?(?:put|set|add|make)\s+(?:me\s+)?(?:a\s+)?)?"
+    r"\breminder\b(?:\s+(?:that|to|of))?\s*"
     # "add 2 more tasks to the list" — the plain "^add (?:a )?task\b" below
     # only matches when that's literally the first thing said; conversation
     # almost never phrases it that plainly ("ok Celine, now could you also
@@ -185,6 +190,14 @@ _CLAUSE_FILLER_RE = re.compile(
 
 def _strip_clause_filler(text: str) -> str:
     text = text.strip(" ,.")
+    # A leading rhetorical/polite question with real content after it
+    # ("Can u do me a favor? I have an interview in an hour") is preamble,
+    # not part of the task — drop everything up to and including that
+    # first "?" rather than leaving it stuck in the title verbatim, which
+    # none of the fixed filler patterns below can generalize to.
+    q_pos = text.find("?")
+    if 0 <= q_pos < len(text) - 1:
+        text = text[q_pos + 1 :].strip(" ,.")
     while True:
         stripped = _CLAUSE_FILLER_RE.sub("", text, count=1).strip(" ,.")
         if stripped == text:
@@ -309,6 +322,11 @@ def _parse_date_match(match: re.Match) -> DatePhrase:
     # though "today"/"tomorrow" work fine — treat it as "today" for date
     # resolution; the actual time comes from the TIME match elsewhere.
     remainder = re.sub(r"\btonight\b", "today", remainder, flags=re.IGNORECASE)
+    # Same quirk again: dateparser fails outright on "in the next 2 hrs" (or
+    # "in the 2 hrs") even though the plain "in 2 hrs" it reduces to parses
+    # fine — the regex above has already validated the offset structure, so
+    # strip the filler instead of asking dateparser to understand it.
+    remainder = re.sub(r"\bin\s+(?:the\s+)?(?:next\s+)?", "in ", remainder, count=1, flags=re.IGNORECASE)
 
     bare_hour_match = _BARE_HOUR_RE.match(remainder.strip())
     if bare_hour_match:

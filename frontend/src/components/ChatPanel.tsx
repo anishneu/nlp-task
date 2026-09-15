@@ -41,12 +41,15 @@ interface Props {
 
 const MAX_INPUT_HEIGHT_PX = 160
 
-function TypingIndicator() {
+function TypingIndicator({ botName }: { botName: string }) {
   return (
-    <div className="mr-auto flex max-w-[75%] items-center gap-1 self-start rounded-xl rounded-bl-sm bg-bubble-bot px-3.5 py-3">
-      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted [animation-delay:-0.2s]" />
-      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted [animation-delay:-0.1s]" />
-      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted" />
+    <div className="flex items-center gap-1.5 px-3.5 pb-2 text-xs text-muted">
+      <span className="inline-flex items-center gap-1 rounded-full bg-bubble-bot px-2.5 py-1.5">
+        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted [animation-delay:-0.2s]" />
+        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted [animation-delay:-0.1s]" />
+        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted" />
+      </span>
+      {botName} is typing…
     </div>
   )
 }
@@ -58,7 +61,7 @@ export function ChatPanel({ botName, onBotNameChange, messages, onSend, isSendin
 
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight })
-  }, [messages, isSending])
+  }, [messages])
 
   useEffect(() => {
     const el = textareaRef.current
@@ -147,8 +150,9 @@ export function ChatPanel({ botName, onBotNameChange, messages, onSend, isSendin
             </div>
           ))
         )}
-        {isSending && <TypingIndicator />}
       </div>
+
+      {isSending && <TypingIndicator botName={botName} />}
 
       <form onSubmit={handleSubmit} className="flex gap-2 border-t border-border p-3.5">
         <textarea
