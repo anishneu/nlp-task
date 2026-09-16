@@ -73,7 +73,7 @@ interface Props {
 
 export function LandingPage({ onGetStarted }: Props) {
   return (
-    <div className="h-screen overflow-y-auto bg-bg text-text">
+    <div className="no-scrollbar h-screen overflow-y-auto bg-bg text-text">
       <BackgroundGlow />
 
       <div className="relative mx-auto flex max-w-5xl flex-col px-6 pb-24 pt-20 sm:pt-28">
