@@ -59,3 +59,12 @@ body,
 .chat-scroll::-webkit-scrollbar-thumb:hover {
   background-color: var(--color-muted);
 }
+
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}

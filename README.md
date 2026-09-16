@@ -10,6 +10,8 @@ Stack: FastAPI (Python) · SQLAlchemy · SQLite (Postgres/MySQL-ready) · `datep
 
 Author: Anish Kuila
 
+![TodoWeave landing page](docs/screenshots/landing-page.png)
+
 ## Table of contents
 - [What it does](#what-it-does)
 - [Architecture](#architecture)
@@ -22,6 +24,8 @@ Author: Anish Kuila
 - [Limitations](#limitations)
 
 ## What it does
+
+![Example conversation with Celine](docs/screenshots/chat-example.png)
 
 Pipeline (chat-first assistant):
 
