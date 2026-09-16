@@ -10,6 +10,8 @@ Stack: FastAPI (Python) · SQLAlchemy · SQLite (Postgres/MySQL-ready) · `datep
 
 Author: Anish Kuila
 
+For a deep dive into the NLP techniques behind this app — intent classification, entity extraction, semantic matching, and the fallback chain tying them together — see [docs/summary/nlp-and-project-overview.md](docs/summary/nlp-and-project-overview.md).
+
 ![TodoWeave landing page](docs/screenshots/landing-page.png)
 
 ## Table of contents
@@ -263,8 +265,7 @@ nlp-task/
 - The Docker setup hasn't been build-tested end-to-end (no Docker in this environment) — the frontend build and backend startup sequence were each verified individually, but the actual `docker build`/`docker compose up` hasn't run for real. Try it yourself before relying on it in production.
 - Conversation titles are LLM-generated when `HF_REPLY_ENABLED=true` (same call/quota as reply rephrasing above), with a plain-truncation fallback otherwise — that's the default.
 - No authentication — single-user, local use for now, by design.
-- No automated test suite yet, by design.
-- No CI/CD pipeline configured, by design.
+- No automated test suite yet, by design — CI (`.github/workflows/ci.yml`) currently only compiles/imports the backend and lints/type-checks/builds the frontend, so it catches syntax and build errors, not behavioral regressions.
 
 ## License
 
