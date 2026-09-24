@@ -76,6 +76,8 @@ Every conversation is a real, persisted thread: a left sidebar lists past conver
 
 ## Architecture
 
+![TodoWeave architecture diagram](docs/screenshots/architecture-diagram.webp)
+
 | Layer | Technology | Status |
 |---|---|---|
 | Backend | FastAPI, Pydantic schemas, SQLAlchemy ORM | Implemented |
