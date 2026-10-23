@@ -10,6 +10,10 @@ Stack: FastAPI (Python) · SQLAlchemy · SQLite (Postgres/MySQL-ready) · `datep
 
 Author: Anish Kuila
 
+Live demo: https://todoweave.netlify.app/
+
+Status: Deployed live — final build
+
 For a deep dive into the NLP techniques behind this app — intent classification, entity extraction, semantic matching, and the fallback chain tying them together — see [docs/summary/nlp-and-project-overview.md](docs/summary/nlp-and-project-overview.md).
 
 ![TodoWeave landing page](docs/screenshots/landing-page.png)
@@ -264,7 +268,6 @@ nlp-task/
 - The task-matching similarity threshold (0.68 cosine similarity) was calibrated on a small manual test set, not a proper eval, and has already been raised once after a real false match slipped through — `"dentist appointment"` scored 0.659 against an unrelated `"call mom"` task under the old 0.65 threshold, high enough to silently reschedule the wrong task. It may still need adjusting if it feels too eager or too conservative in practice.
 - Meeting links only work if you paste one into the message yourself — no integration generates a fresh one for you.
 - Recurrence supports `daily`/`weekly`/`monthly`/`yearly`/`weekday`, plus an arbitrary "every N days/weeks/months" custom interval — still no full RRULE support (e.g. "the last Friday of the month") and no per-user time zones (one global `APP_TIMEZONE` for the whole app, not per-user).
-- The Docker setup hasn't been build-tested end-to-end (no Docker in this environment) — the frontend build and backend startup sequence were each verified individually, but the actual `docker build`/`docker compose up` hasn't run for real. Try it yourself before relying on it in production.
 - Conversation titles are LLM-generated when `HF_REPLY_ENABLED=true` (same call/quota as reply rephrasing above), with a plain-truncation fallback otherwise — that's the default.
 - No authentication — single-user, local use for now, by design.
 - No automated test suite yet, by design — CI (`.github/workflows/ci.yml`) currently only compiles/imports the backend and lints/type-checks/builds the frontend, so it catches syntax and build errors, not behavioral regressions.
