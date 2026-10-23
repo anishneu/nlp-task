@@ -1,0 +1,8 @@
+/tasks            https://todoweave-api.onrender.com/tasks            200
+/tasks/*          https://todoweave-api.onrender.com/tasks/:splat      200
+/chat             https://todoweave-api.onrender.com/chat              200
+/reminders/*      https://todoweave-api.onrender.com/reminders/:splat  200
+/conversations    https://todoweave-api.onrender.com/conversations     200
+/conversations/*  https://todoweave-api.onrender.com/conversations/:splat  200
+/health           https://todoweave-api.onrender.com/health            200
+/*                /index.html                                          200
